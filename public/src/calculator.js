@@ -63,6 +63,25 @@ export function renderCalculator(container, prefill) {
     }
   }
 
+  const tickerInput = form.querySelector('#f-ticker');
+  const companyNameInput = form.querySelector('#f-companyName');
+
+  tickerInput.addEventListener('blur', async () => {
+    const ticker = tickerInput.value.trim().toUpperCase();
+    if (!ticker || companyNameInput.value.trim() !== '') return;
+
+    try {
+      const res = await fetch(`/api/ticker?symbol=${encodeURIComponent(ticker)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.companyName && companyNameInput.value.trim() === '') {
+        companyNameInput.value = data.companyName;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
   function readInputs() {
     const ticker = form.querySelector('#f-ticker').value.trim().toUpperCase();
     const companyName = form.querySelector('#f-companyName').value.trim();
