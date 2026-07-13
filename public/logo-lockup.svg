@@ -1,0 +1,23 @@
+<svg width="320" height="48" viewBox="0 0 320 48" xmlns="http://www.w3.org/2000/svg">
+  <!-- Mark -->
+  <g transform="translate(0,0)">
+    <rect x="1" y="1" width="46" height="46" rx="13" fill="#111720" stroke="#1c2530" stroke-width="1.2"/>
+    <line x1="24" y1="7" x2="24" y2="12" stroke="#3b9eff" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="24" cy="5.5" r="2.3" fill="#00e5a0"/>
+    <rect x="11" y="12" width="26" height="20" rx="6" fill="#0d1219" stroke="#3b9eff" stroke-width="2"/>
+    <circle cx="18.5" cy="21.5" r="3" fill="#3b9eff"/>
+    <text x="29" y="24.5" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#00e5a0" text-anchor="middle">$</text>
+    <path d="M16.5 28 Q24 30.5 31.5 27.5" stroke="#3b9eff" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="58" y="23" font-family="Inter, sans-serif" font-size="18" font-weight="700" letter-spacing="0.5" fill="#e8edf3">
+    STOCKINATOR
+  </text>
+  <text x="58" y="23" dx="163" font-family="JetBrains Mono, monospace" font-size="18" font-weight="700" fill="#3b9eff">
+    5000
+  </text>
+  <text x="58" y="37" font-family="Inter, sans-serif" font-size="9" letter-spacing="1.5" fill="#5a6b7d">
+    PERSONAL FINANCE, AUTOMATED
+  </text>
+</svg>
