@@ -15,7 +15,7 @@ const FIELDS = [
 const fmtMoney = (n) => `$${n.toFixed(2)}`;
 const fmtPct = (n) => `${n.toFixed(1)}%`;
 
-export function renderCalculator(container, prefill) {
+export function renderCalculator(container, prefill, options = {}) {
   container.innerHTML = `
     <div class="grid-2col">
       <div class="card">
@@ -242,7 +242,7 @@ export function renderCalculator(container, prefill) {
     }
   });
 
-  if (prefill) {
+  if (prefill && options.autoCalculate !== false) {
     form.dispatchEvent(new Event('submit', { cancelable: true }));
   }
 }
