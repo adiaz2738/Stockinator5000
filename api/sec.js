@@ -14,7 +14,7 @@ const CIK_RE = /^\d{1,10}$/;
 
 let nextSlot = 0;
 
-async function secFetch(url) {
+async function secFetch(url, accept = 'application/json') {
   const userAgent = process.env.SEC_USER_AGENT;
   if (!userAgent) throw new Error('SEC_USER_AGENT is not configured');
 
@@ -24,7 +24,7 @@ async function secFetch(url) {
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 
   const res = await fetch(url, {
-    headers: { 'User-Agent': userAgent, Accept: 'application/json' },
+    headers: { 'User-Agent': userAgent, Accept: accept },
     signal: AbortSignal.timeout(20000),
   });
   return res;
@@ -395,4 +395,225 @@ export function buildMetrics(facts) {
       missing: METRIC_KEYS.filter((k) => !found2.includes(k)),
     },
   };
+}
+
+// ---------- Filing text extraction (for the Story tab) ----------
+
+const ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
+
+export const SECTION_CAPS = { business: 30000, risk_factors: 30000, mdna: 40000, segments: 12000 };
+export const SECTION_KEYS = Object.keys(SECTION_CAPS);
+
+// Most recent 10-K / 40-F / 20-F for a CIK, or null.
+export async function findLatestAnnualFiling(cik) {
+  if (!CIK_RE.test(cik)) throw new Error('invalid cik');
+  const padded = cik.padStart(10, '0');
+  const res = await secFetch(`https://data.sec.gov/submissions/CIK${padded}.json`);
+  if (!res.ok) throw new Error(`SEC submissions request failed with status ${res.status}`);
+  const sub = await res.json();
+  const rc = sub?.filings?.recent;
+  if (!rc) return null;
+  const i = rc.form.findIndex((f) => ANNUAL_FORMS.has(f));
+  if (i < 0) return null;
+  const accession = rc.accessionNumber[i];
+  const base = `${ARCHIVES}/${parseInt(padded, 10)}/${accession.replace(/-/g, '')}`;
+  return {
+    form: rc.form[i],
+    filingDate: rc.filingDate[i],
+    reportDate: rc.reportDate?.[i] || null,
+    accession,
+    primaryDocument: rc.primaryDocument[i],
+    baseUrl: base,
+    primaryUrl: `${base}/${rc.primaryDocument[i]}`,
+    indexUrl: `${base}/${accession}-index.htm`,
+  };
+}
+
+// Documents in a filing: [{ name, type, size }]. Sizes come from index.json; document types
+// (EX-99.1, EX-13...) only appear on the -index.htm page, so both are read.
+export async function listFilingDocuments(filing) {
+  const jsonRes = await secFetch(`${filing.baseUrl}/index.json`);
+  if (!jsonRes.ok) throw new Error(`SEC filing index failed with status ${jsonRes.status}`);
+  const items = (await jsonRes.json())?.directory?.item || [];
+
+  const types = new Map();
+  const htmRes = await secFetch(filing.indexUrl, 'text/html');
+  if (htmRes.ok) {
+    const html = await htmRes.text();
+    for (const row of html.match(/<tr[\s\S]*?<\/tr>/gi) || []) {
+      const cells = (row.match(/<td[\s\S]*?<\/td>/gi) || []).map((c) => c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim());
+      const link = row.match(/href="[^"]*\/([^"/]+)"/i);
+      if (cells.length >= 5 && link) types.set(link[1], cells[3].toUpperCase());
+    }
+  }
+  return items.map((it) => ({ name: it.name, size: Number(it.size) || 0, type: types.get(it.name) || null }));
+}
+
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', rsquo: "'", lsquo: "'", rdquo: '"', ldquo: '"', ndash: '-', mdash: '-', hellip: '...' };
+
+export function htmlToText(html) {
+  return html
+    .replace(/<ix:header[\s\S]*?<\/ix:header>/gi, ' ')
+    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<\/(p|div|tr|li|h[1-6]|table)\s*>|<br\s*\/?>/gi, '\n')
+    .replace(/<\/t[dh]\s*>/gi, ' | ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? ' ')
+    .replace(/[  ​]/g, ' ')
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').replace(/^[| ]+|[| ]+$/g, '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+function capSection(text, cap, source) {
+  const truncated = text.length > cap;
+  const out = truncated ? text.slice(0, cap) : text;
+  return { status: 'found', text: out, chars: out.length, truncated, source };
+}
+
+const missingSection = () => ({ status: 'missing', text: '', chars: 0, truncated: false, source: null });
+
+// 10-K: locate "Item N" headings; for a wanted item take the heading whose body is longest
+// (the table-of-contents entry is short, the real section is long).
+const ITEM_HEAD = /^item\s+(1a|1b|1c|1|2|3|4|5|6|7a|7|8|9a|9b|9c|9|10|11|12|13|14|15|16)\b[\s.:-]/i;
+
+function itemExtractor(lines) {
+  const heads = [];
+  lines.forEach((line, idx) => {
+    const m = line.length < 200 && line.match(ITEM_HEAD);
+    if (m) heads.push({ idx, id: m[1].toLowerCase() });
+  });
+  return (id) => {
+    let best = '';
+    for (let h = 0; h < heads.length; h++) {
+      if (heads[h].id !== id) continue;
+      let end = h + 1;
+      while (end < heads.length && heads[end].id === id) end++;
+      const stop = end < heads.length ? heads[end].idx : lines.length;
+      const body = lines.slice(heads[h].idx, stop).join('\n');
+      if (body.length > best.length) best = body;
+    }
+    return best;
+  };
+}
+
+// Prose density: count of sentence-length lines after a heading. Separates real sections
+// from table-of-contents entries and one-line mentions.
+function proseScore(lines, from, span) {
+  let n = 0;
+  for (let i = from; i < Math.min(lines.length, from + span); i++) if (lines[i].length > 80) n++;
+  return n;
+}
+
+const SEGMENT_HEAD = /^(?:note\s+\d+\s*[.:—–-]?\s*)?(?:\d+(?:\.|\s+n)?\s+)?(?:operating\s+segments?|segments?|business\s+segments?|reportable\s+segments?|concentrations?\s+of\s+(?:credit\s+risk|customers?|risk)|major\s+customers?|significant\s+customers?)(?:\s+[a-z&,'’-]+){0,4}$/i;
+const NOTE_HEAD = /^(?:note\s+\d+\s*[.:—–-]|\d+\s+n\s+[a-z])/i;
+
+function extractSegments(lines) {
+  let best = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > 120 || !SEGMENT_HEAD.test(lines[i]) || /\btotal\b/i.test(lines[i])) continue;
+    // A numbered financial-statement note beats a same-named subsection of the business description
+    const score = proseScore(lines, i + 1, 40) + (NOTE_HEAD.test(lines[i]) ? 1000 : 0);
+    if (score >= 4 && (!best || score > best.score)) best = { idx: i, score };
+  }
+  if (!best) return null;
+  const isNote = NOTE_HEAD.test(lines[best.idx]);
+  let end = Math.min(lines.length, best.idx + 4000);
+  if (isNote) {
+    for (let j = best.idx + 1; j < end; j++) {
+      if (NOTE_HEAD.test(lines[j])) { end = j; break; }
+    }
+  }
+  return lines.slice(best.idx, end).join('\n');
+}
+
+// Heading keywords for exhibit-style annual reports (40-F / 20-F, or a 10-K with Exhibit 13).
+const KEYWORD_HEADS = {
+  business: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:description\s+of\s+the\s+business|general\s+development\s+of\s+the\s+business|business\s+overview|our\s+business|the\s+business|business\s+of\s+the\s+company)\b[^.]{0,60}$/i,
+  risk_factors: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:risk\s+factors|risks\s+and\s+uncertainties|principal\s+risks[a-z\s]*)\s*$/i,
+  mdna: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:management['’]?s\s+discussion\s+and\s+analysis|operating\s+and\s+financial\s+review[a-z\s]*)\b[^.]{0,80}$/i,
+};
+
+// Exhibit sections have no reliable end marker, so the body runs from the best heading to the cap.
+function extractByKeyword(lines, key, cap) {
+  const re = KEYWORD_HEADS[key];
+  let best = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > 120 || !re.test(lines[i])) continue;
+    const score = proseScore(lines, i + 1, 80);
+    if (score >= 8 && (!best || score > best.score)) best = { idx: i, score };
+  }
+  if (!best) return null;
+  const out = [];
+  let size = 0;
+  for (let j = best.idx; j < lines.length && size <= cap + 1; j++) {
+    out.push(lines[j]);
+    size += lines[j].length + 1;
+  }
+  return out.join('\n');
+}
+
+async function fetchDocText(url) {
+  const res = await secFetch(url, 'text/html');
+  if (!res.ok) throw new Error(`SEC document request failed with status ${res.status}`);
+  return htmlToText(await res.text());
+}
+
+// Returns { filing, sections } or null when the company has no annual filing. Each section is
+// { status: 'found'|'missing', text, chars, truncated, source }.
+export async function extractFilingSections(cik) {
+  const filing = await findLatestAnnualFiling(cik);
+  if (!filing) return null;
+  const docs = await listFilingDocuments(filing);
+  const sections = {};
+  for (const k of SECTION_KEYS) sections[k] = missingSection();
+  const set = (key, text, source) => {
+    if (text && text.length > 500) sections[key] = capSection(text, SECTION_CAPS[key], source);
+  };
+  const isHtml = (d) => /\.html?$/i.test(d.name);
+
+  if (filing.form === '10-K') {
+    const lines = (await fetchDocText(filing.primaryUrl)).split('\n');
+    const item = itemExtractor(lines);
+    set('business', item('1'), 'Item 1');
+    set('risk_factors', item('1a'), 'Item 1A');
+    set('mdna', item('7'), 'Item 7 (MD&A)');
+    set('segments', extractSegments(lines), 'Segment / concentration note');
+
+    // MD&A incorporated by reference from an Exhibit 13 annual report
+    if (sections.mdna.chars < 3000) {
+      const ex13 = docs.find((d) => d.type?.startsWith('EX-13') && isHtml(d));
+      if (ex13) {
+        const exLines = (await fetchDocText(`${filing.baseUrl}/${ex13.name}`)).split('\n');
+        const t = extractByKeyword(exLines, 'mdna', SECTION_CAPS.mdna);
+        if (t) set('mdna', t, 'EX-13 (MD&A)');
+      }
+    }
+    return { filing, sections };
+  }
+
+  // 40-F / 20-F: the main document is a wrapper; read the annual report exhibits.
+  const exhibits = docs
+    .filter((d) => /^EX-(99|13)/.test(d.type || '') && isHtml(d) && d.size > 100000)
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 4);
+  const cands = { business: [], risk_factors: [], mdna: [], segments: [] };
+  for (const ex of exhibits) {
+    const lines = (await fetchDocText(`${filing.baseUrl}/${ex.name}`)).split('\n');
+    const src = `${ex.type} (${ex.name})`;
+    for (const key of ['business', 'risk_factors', 'mdna']) {
+      const t = extractByKeyword(lines, key, SECTION_CAPS[key]);
+      if (t) cands[key].push({ t, src });
+    }
+    const seg = extractSegments(lines);
+    if (seg) cands.segments.push({ t: seg, src });
+  }
+  for (const key of SECTION_KEYS) {
+    const best = cands[key].sort((a, b) => b.t.length - a.t.length)[0];
+    if (best) set(key, best.t, best.src);
+  }
+  return { filing, sections };
 }

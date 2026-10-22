@@ -513,3 +513,40 @@ table.fin-table tr.group-row td { text-align: left; font-family: var(--sans); fo
 .chart-grid { stroke: var(--border); stroke-width: 1; }
 .chart-zero { stroke: var(--border-hi); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart-label { fill: var(--text-3); font-family: var(--mono); font-size: 9px; }
+
+/* ---------- Filings: sub-tabs & Story ---------- */
+[hidden] { display: none !important; }
+
+.sub-tabs { display: flex; gap: 4px; margin-top: 20px; border-bottom: 1px solid var(--border); }
+.sub-tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 10px 16px; margin-bottom: -1px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+.sub-tab:hover { color: var(--text); }
+.sub-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+.pill-warn { background: rgba(255,201,64,0.12); color: var(--yellow); }
+
+.story-intro { font-size: 13px; color: var(--text-2); line-height: 1.55; margin-bottom: 16px; }
+.story-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.story-hint { font-size: 12px; color: var(--text-3); }
+.story-progress { margin-top: 16px; }
+.progress-text { font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+.progress-bar { height: 4px; border-radius: 999px; background: var(--surface); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--blue); box-shadow: 0 0 8px var(--blue-glow-strong); transition: width .3s; }
+.story-error { margin-top: 14px; font-size: 13px; color: var(--red); }
+.story-sections { display: flex; flex-direction: column; gap: 20px; }
+
+.story-item { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.story-item:last-of-type { border-bottom: none; }
+.story-item-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.story-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.story-rank { width: 22px; height: 22px; border-radius: 50%; background: var(--blue-glow); color: var(--blue); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.story-text { font-size: 13px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; }
+.story-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.src-pill, .kind-tag { font-size: 10px; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; }
+.src-pill { background: var(--surface); border: 1px solid var(--border-hi); color: var(--text-2); font-family: var(--mono); }
+.kind-tag { font-weight: 600; text-transform: uppercase; }
+.kind-fact { background: var(--green-dim); color: var(--green); }
+.kind-interp { background: var(--blue-glow); color: var(--blue); }
+
+.story-meta { margin-top: 0; padding-top: 0; border-top: none; }
+.story-source-link { margin-top: 16px; }
+.disclaimer { font-size: 12px; color: var(--text-3); text-align: center; padding: 4px 0 8px; }

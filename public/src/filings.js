@@ -1,3 +1,5 @@
+import { renderStoryPane } from './story.js';
+
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -5,6 +7,7 @@ const NA = 'N/A';
 
 // Last loaded company, so switching tabs doesn't throw the page away.
 let lastLoaded = null;
+let activeSubTab = 'metrics';
 
 // ---------- DOM helpers (user/API text always goes through textContent) ----------
 
@@ -361,7 +364,32 @@ export function renderFilings(container, { onSendToCalculator }) {
     el('div', { class: 'search-hint', text: 'Free data from SEC EDGAR (XBRL). Annual filings only: 10-K, 40-F, 20-F.' }),
   ]);
   const results = el('div', { class: 'filings-results' });
-  container.append(searchCard, results);
+  const storyPane = el('div', { class: 'filings-results' });
+  const subMetrics = el('button', { class: 'sub-tab', text: 'Metrics', attrs: { type: 'button' } });
+  const subStory = el('button', { class: 'sub-tab', text: 'Story', attrs: { type: 'button' } });
+  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStory]);
+  container.append(searchCard, subTabs, results, storyPane);
+
+  function showSubTab(name) {
+    activeSubTab = name;
+    subMetrics.classList.toggle('active', name === 'metrics');
+    subStory.classList.toggle('active', name === 'story');
+    results.hidden = name !== 'metrics';
+    storyPane.hidden = name !== 'story';
+    if (name === 'story') {
+      renderStoryPane(storyPane, { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null });
+    }
+  }
+  subMetrics.addEventListener('click', () => showSubTab('metrics'));
+  subStory.addEventListener('click', () => showSubTab('story'));
+
+  // Metrics for whatever is in the search box, loading them first when they aren't loaded yet
+  async function ensureData() {
+    const q = input.value.trim();
+    if (!q) return lastLoaded?.data ?? null;
+    if (lastLoaded && lastLoaded.q === q) return lastLoaded.data;
+    return load(q);
+  }
 
   let requestSeq = 0;
 
@@ -409,19 +437,21 @@ export function renderFilings(container, { onSendToCalculator }) {
       const url = `/api/filings?q=${encodeURIComponent(q)}${refresh ? '&refresh=1' : ''}`;
       const res = await fetch(url);
       const body = await res.json().catch(() => ({}));
-      if (seq !== requestSeq) return;
+      if (seq !== requestSeq) return null;
       if (!res.ok) {
         if (keep) showData(keep, false);
         else showMessage(typeof body.error === 'string' ? body.error : 'Could not load filings data', true);
-        return;
+        return null;
       }
       lastLoaded = { q, data: body };
       showData(body);
+      return body;
     } catch (err) {
       console.error(err);
-      if (seq !== requestSeq) return;
+      if (seq !== requestSeq) return null;
       if (keep) showData(keep, false);
       else showMessage('Could not load filings data', true);
+      return null;
     } finally {
       if (seq === requestSeq) loadBtn.disabled = false;
     }
@@ -440,4 +470,5 @@ export function renderFilings(container, { onSendToCalculator }) {
   } else {
     showMessage('Enter a ticker or paste an EDGAR URL to see 10 years of Buffett-style metrics.', false);
   }
+  showSubTab(activeSubTab);
 }
