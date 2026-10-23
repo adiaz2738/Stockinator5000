@@ -1,5 +1,6 @@
 import sql from './_db.js';
-import { resolveInput, fetchCompanyFacts, buildMetrics } from './sec.js';
+import { requireAuth } from './_auth.js';
+import { resolveInput, fetchCompanyFacts, buildMetrics } from './_sec.js';
 
 const USER_ID = 'local';
 const CACHE_MS = 7 * 24 * 3600 * 1000;
@@ -34,6 +35,7 @@ function toResponse(row, cached) {
 }
 
 export default async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });

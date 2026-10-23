@@ -1,5 +1,3 @@
-const ACCESS_KEY_STORAGE = 'stockinatorAccessKey';
-
 const SECTION_TITLES = {
   business_summary: 'Business Summary',
   revenue_sources: 'Revenue Sources',
@@ -34,61 +32,17 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
-// ---------- Access key ----------
-
-function readStoredKey() {
-  try {
-    return localStorage.getItem(ACCESS_KEY_STORAGE) || '';
-  } catch (err) {
-    return '';
-  }
-}
-
-function askForKey() {
-  const entered = window.prompt('Enter your access key to generate stories:');
-  const key = entered ? entered.trim() : '';
-  if (!key) return '';
-  try {
-    localStorage.setItem(ACCESS_KEY_STORAGE, key);
-  } catch (err) {
-    // storage unavailable: the key just won't be remembered
-  }
-  return key;
-}
-
-function forgetKey() {
-  try {
-    localStorage.removeItem(ACCESS_KEY_STORAGE);
-  } catch (err) {
-    // ignore
-  }
-}
-
 // ---------- API ----------
 
-async function rawPost(key, body) {
+// The session cookie authenticates the request; a 401 is handled globally by returning to the login screen.
+async function post(body) {
   const res = await fetch('/api/narrative', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-access-key': key },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };
-}
-
-// POST with the access key; on a 401 the stored key is dropped and asked for once more.
-async function post(body) {
-  let key = readStoredKey() || askForKey();
-  if (!key) return { ok: false, status: 401, data: { error: 'Access key required' } };
-  let r = await rawPost(key, body);
-  if (r.status === 401) {
-    forgetKey();
-    key = askForKey();
-    if (!key) return r;
-    r = await rawPost(key, body);
-    if (r.status === 401) forgetKey();
-  }
-  return r;
 }
 
 // ---------- Rendering ----------
@@ -189,7 +143,7 @@ function updateButton() {
 }
 
 function failMessage(r) {
-  if (r.status === 401) return 'Access key was not accepted.';
+  if (r.status === 401) return 'Your session expired. Please sign in again.';
   if (r.status === 429) {
     const limit = Number.isInteger(r.data?.dailyLimit) ? `${r.data.dailyLimit} ` : '';
     return `Daily limit of ${limit}story generations reached. Try again tomorrow.`;

@@ -1,6 +1,6 @@
-import crypto from 'node:crypto';
 import sql from './_db.js';
-import { findLatestAnnualFiling, extractFilingSections, SECTION_KEYS } from './sec.js';
+import { requireAuth } from './_auth.js';
+import { findLatestAnnualFiling, extractFilingSections, SECTION_KEYS } from './_sec.js';
 
 const USER_ID = 'local';
 const DEFAULT_DAILY_LIMIT = 5;
@@ -234,15 +234,6 @@ function sanitizeSection(key, parsed) {
 
 // ---------- Auth, limits, state ----------
 
-function hasValidAccessKey(req) {
-  const expected = process.env.APP_ACCESS_KEY;
-  const given = req.headers?.['x-access-key'];
-  if (!expected || typeof given !== 'string' || !given) return false;
-  const a = crypto.createHash('sha256').update(given).digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
-}
-
 async function ensureTables() {
   await sql`
     CREATE TABLE IF NOT EXISTS company_narratives (
@@ -303,12 +294,10 @@ async function loadRow(cik, accession) {
 // ---------- Handler ----------
 
 export default async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
-  }
-  if (!hasValidAccessKey(req)) {
-    return res.status(401).json({ error: 'Access key required' });
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};

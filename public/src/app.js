@@ -1,8 +1,11 @@
 import { renderCalculator } from './calculator.js';
 import { renderValuations } from './valuations.js';
 import { renderFilings, FILINGS_PREFILL_KEY } from './filings.js';
+import { renderLogin } from './login.js';
 
 const app = document.getElementById('app');
+const loginScreen = document.getElementById('login-screen');
+const signOutBtn = document.getElementById('signout');
 const tabCalc = document.getElementById('tab-calculator');
 const tabFilings = document.getElementById('tab-filings');
 const tabVal = document.getElementById('tab-valuations');
@@ -66,10 +69,67 @@ function navigate(path) {
   render();
 }
 
+// ---------- Auth gate ----------
+
+function showLogin() {
+  document.body.classList.add('locked');
+  app.replaceChildren();
+  loginScreen.hidden = false;
+  renderLogin(loginScreen, showApp);
+}
+
+function showApp() {
+  loginScreen.hidden = true;
+  loginScreen.replaceChildren();
+  document.body.classList.remove('locked');
+  render();
+}
+
+// Any 401 from an API route sends the user back to the login screen (the login call itself is exempt).
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const res = await nativeFetch(input, init);
+  const url = typeof input === 'string' ? input : input?.url || '';
+  if (res.status === 401 && url.startsWith('/api/') && !url.startsWith('/api/auth') && !document.body.classList.contains('locked')) {
+    showLogin();
+  }
+  return res;
+};
+
+signOutBtn.addEventListener('click', async () => {
+  try {
+    await nativeFetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'logout' }),
+    });
+  } catch (err) {
+    console.error(err);
+  }
+  // Reload so no company data from the old session stays in memory
+  window.location.reload();
+});
+
 tabCalc.addEventListener('click', () => navigate('/calculator'));
 tabFilings.addEventListener('click', () => navigate('/filings'));
 tabVal.addEventListener('click', () => navigate('/valuations'));
 
-window.addEventListener('popstate', () => render());
+window.addEventListener('popstate', () => {
+  if (!document.body.classList.contains('locked')) render();
+});
 
-render();
+async function init() {
+  try {
+    const res = await nativeFetch('/api/auth?action=me');
+    const data = await res.json();
+    if (data.authenticated === true) {
+      showApp();
+      return;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  showLogin();
+}
+
+init();

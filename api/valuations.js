@@ -1,4 +1,5 @@
 import sql from './_db.js';
+import { requireAuth } from './_auth.js';
 
 const USER_ID = 'local';
 
@@ -26,6 +27,7 @@ async function ensureTable() {
 }
 
 export default async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   try {
     await ensureTable();
 

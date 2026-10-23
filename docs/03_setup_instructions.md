@@ -48,7 +48,8 @@ valuelens/
 │   └── index.html      # or your entry point
 ├── api/
 │   ├── _db.js          # Neon connection (server-side only)
-│   ├── _auth.js        # JWT verification (when auth is added)
+│   ├── _auth.js        # session cookie signing/verification, requireAuth()
+│   ├── auth.js         # login / logout / me
 │   ├── valuations.js   # GET/POST saved valuations
 │   └── calculate.js    # DCF calculation endpoint (optional server-side)
 └── src/
@@ -246,6 +247,8 @@ Run through this before opening the app to anyone else:
 
 - [ ] `.env.local` is in `.gitignore` and never appears in `git status`
 - [ ] `DATABASE_URL` and `FMP_API_KEY` are set as Vercel env vars, not hardcoded anywhere
+- [ ] Every route file in `api/` calls `requireAuth(req, res)` at the top of its handler. Helper modules must start with an underscore (`_db.js`, `_auth.js`, `_sec.js`, `_fmp.js`) so Vercel does not deploy them as public routes
+- [ ] `APP_USERNAME`, `APP_PASSWORD`, and `SESSION_SECRET` (32+ random characters) are set in Vercel, and the session cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` in production
 - [ ] Every `api/` route that queries the DB filters `WHERE user_id = $1` using a server-derived value, not a client-supplied param
 - [ ] All SQL uses `$1, $2` parameterized placeholders — grep for template literals in queries: `` `SELECT ... ${` `` should not appear
 - [ ] Any user-entered text (ticker, notes) is rendered via `textContent` in JS, never `innerHTML`
@@ -273,3 +276,32 @@ npm audit
 # Check Node version
 node -v
 ```
+
+---
+
+## 13. Local Development
+
+The `api/` routes are Vercel serverless functions. They only run under the Vercel dev server, so use:
+
+```bash
+vercel env pull .env.local   # copy env vars from Vercel into .env.local (first time, and after any change)
+vercel dev                   # serves public/ and the api/ routes together
+```
+
+**Do not use `npm run dev` or a plain static server.** Those serve the frontend only, so every `/api/...` call fails, and the login screen cannot sign you in. `vercel dev` also works over plain `http://localhost`, which is why the session cookie only gets the `Secure` flag when the host is not `localhost`.
+
+Environment variables the app needs (all server-side; set them in Vercel, then pull them):
+
+| Variable | Purpose |
+|---|---|
+| `NEON_DATABASE_URL` | Neon connection string |
+| `FMP_API_KEY` | FMP ticker lookups |
+| `SEC_USER_AGENT` | Descriptive User-Agent sent to SEC EDGAR, e.g. `ValueLens you@example.com` |
+| `ANTHROPIC_API_KEY` | Story generation |
+| `APP_USERNAME`, `APP_PASSWORD` | The single user's login |
+| `SESSION_SECRET` | Signs the session cookie. At least 32 random characters, e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Changing it signs everyone out |
+| `ANTHROPIC_MODEL` (optional) | Defaults to `claude-sonnet-5-5` |
+| `DAILY_STORY_LIMIT` (optional) | Story generations per day, default 5 |
+| `COOKIE_DOMAIN` (optional) | Leave unset for a host-only session cookie (the default). Set e.g. `.financinator.online` only to share one login across subdomains, which also means sharing `SESSION_SECRET` with the other app |
+
+If `SESSION_SECRET` is missing or too short, every route returns 401 (it fails closed). Failed logins are tracked per IP in Neon (`login_attempts`): five failures within 15 minutes locks that IP out for the rest of the window.

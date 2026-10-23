@@ -37,8 +37,8 @@ This is a research tool — no payments flow through it. It is initially single-
 |---|---|
 | **Phase 1 — DCF Calculator** | **Done.** Calculator, step-by-step breakdown, saved valuations (Neon), FMP ticker auto-fill for company name, logo/branding |
 | **Filings tab** (was Phase 2/3) | **Done.** SEC EDGAR XBRL data, 10-year metrics table, screener scorecard, trend charts, Send to Calculator, Neon cache |
-| **Story sub-tab** | **Done.** AI narrative from the latest annual filing, access-key protected |
-| Auth | Not built. Single user via a shared access key and a hardcoded `'local'` user_id |
+| **Story sub-tab** | **Done.** AI narrative from the latest annual filing |
+| Auth | **Single-user login done** (username/password, signed session cookie, DB-backed lockout). Multi-user auth (Clerk) not built; `user_id` is still the hardcoded `'local'` |
 | Cross-company screener | Not built (see Next Up) |
 
 ### Phase 1 — DCF Calculator (done)
@@ -55,7 +55,7 @@ This is a research tool — no payments flow through it. It is initially single-
 Free, server-side data from SEC EDGAR's XBRL `companyfacts` API. Entirely separate from the calculator, except for one hand-off.
 
 - **Input:** a ticker or a pasted EDGAR URL, validated server-side. Tickers map to a CIK through SEC's `company_tickers.json`
-- **Extraction (`api/sec.js`):** `us-gaap` and `ifrs-full` taxonomies, annual forms only (10-K, 40-F, 20-F), deduped by fiscal year keeping the latest filing. Each metric uses an ordered fallback list of tag names, merged per year so companies that changed tags mid-decade still get a full series. Anything not found is `null` and shown as N/A
+- **Extraction (`api/_sec.js`):** `us-gaap` and `ifrs-full` taxonomies, annual forms only (10-K, 40-F, 20-F), deduped by fiscal year keeping the latest filing. Each metric uses an ordered fallback list of tag names, merged per year so companies that changed tags mid-decade still get a full series. Anything not found is `null` and shown as N/A
 - **Metrics:** revenue, cost of revenue, gross profit, SG&A, R&D, depreciation, operating income, interest expense, net income, diluted EPS and shares, current assets/liabilities, total liabilities, equity, long-term debt, retained earnings, net receivables, operating cash flow, capex
 - **Derived per year:** gross margin, net margin, SG&A % of gross profit, interest % of operating income, debt-to-equity (total liabilities / equity), long-term debt vs. years of earnings, current ratio, ROE, FCF, FCF/share, EPS growth. Also a 10-year FCF CAGR used as a suggested growth input
 - **Screener scorecard:** each core rule shows the latest value, a PASS / FAIL / N/A pill, and how many of the last 10 years passed. Optional rules (ROE, current ratio, retained earnings) sit in a secondary section
@@ -73,7 +73,7 @@ An AI-written narrative of the business, generated from the latest annual filing
 - **Per-section generation** driven from the client with a progress indicator, so no single serverless call approaches the timeout. The shared filing text is sent as an **Anthropic prompt-cached** block, so after the first call each section only pays full price for its own instruction
 - **Guardrails:** filing text is treated as untrusted data in the system prompt; the model may use only the supplied metrics and text, writes "Not disclosed in the provided sections" when something is missing, and gives no buy/sell recommendation. All output is rendered with `textContent`
 - **Cache:** `company_narratives` in Neon. A story is reused until a newer filing appears or Regenerate is clicked
-- **Protection:** requests need an `x-access-key` header matching `APP_ACCESS_KEY`, and generations are capped per day (default 5, set with `DAILY_STORY_LIMIT`; tracked in `narrative_usage`)
+- **Protection:** requests need a valid login session like every other route, and generations are capped per day (default 5, set with `DAILY_STORY_LIMIT`; tracked in `narrative_usage`)
 
 ---
 
@@ -100,25 +100,18 @@ An AI-written narrative of the business, generated from the latest annual filing
 
 In this order:
 
-### 1. Clerk auth
-
-- Replace the shared access key and the hardcoded `'local'` user_id with Clerk
-- Sign-ups locked to the owner's email
-- Derive `user_id` from the verified session server-side, never from the client
-- Migrate existing rows (`valuations`, `company_financials`, `company_narratives`, `narrative_usage`) from `'local'` to the real user id
-- Before opening to anyone else: run the IDOR test from the security checklist
-
-### 2. News-context section ("why is the stock moving")
+### 1. News-context section ("why is the stock moving")
 
 - A section that summarizes recent news around a ticker
 - Clearly labeled as separate from filing data, with its own sources and dates, so news context is never mistaken for facts from the filing
 
-### 3. In-app AI chat
+### 2. In-app AI chat
 
 - Ask questions about a company inside the app
 - Reuses the stored metrics and narratives as context instead of re-fetching, keeping cost and latency low
+- **Message cap** per day (like `DAILY_STORY_LIMIT`), since chat is the costliest feature: every turn re-reads the context and replies are open-ended
 
-### 4. Metric refinements
+### 3. Metric refinements
 
 - **Attributable FCF** after minority interests
 - **Non-recurring gain adjustment** (e.g. gains on asset sales) when judging earnings consistency
@@ -126,25 +119,64 @@ In this order:
 - **FCF/share from cover-page share counts** (the `dei` share count), to fill the gap for per-share-class companies like Visa
 - **Debt-to-equity on attributable equity** rather than total equity including non-controlling interests
 
-### 5. Screener across cached companies
+### 4. Screener across cached companies
 
 - Run the core and optional rules across every company already in `company_financials`
 - Filter panel with a toggle and threshold per rule; results table with the metric values and Pass/Fail per rule
 - Click any ticker to open it in Filings or send it to the calculator
+
+### 5. Managed auth provider (only if multi-user happens)
+
+- Optional. The single-user login is enough for personal use; see "If This Is Ever Productized" below for what moving to a managed provider involves
+
+---
+
+## Hosting
+
+The app will live at **stocks.financinator.online**, a subdomain of the existing Financinator domain.
+
+- The login cookie is **host-only** for now: the browser sends it only to `stocks.financinator.online`, so it is never shared with Financinator
+- An optional **`COOKIE_DOMAIN`** env var (unset by default) adds a `Domain=` attribute to the session cookie. Setting it to `.financinator.online` would share one login across subdomains later, as a config change rather than a code change
+- Sharing a login is not free: Financinator is in production, so it would have to be changed to accept the same cookie, both apps would then share **one `SESSION_SECRET`**, and a leak or misconfiguration in either app would expose both (one shared failure point). Keep the cookie host-only unless that trade is clearly worth it
+- Helper modules in `api/` must be **prefixed with an underscore** (`_db.js`, `_auth.js`, `_sec.js`, `_fmp.js`). Vercel deploys every other file in `api/` as a public endpoint, so an un-prefixed helper would become one
+
+---
+
+## Cost Notes
+
+- One Story generation costs about **$0.33**: roughly $0.13 is the one-time cache write of the filing text, and each of the 9 sections adds about $0.03
+- Stories are cached per filing in `company_narratives`, so **reloads are free**. Only a new story (first generation, or a newer filing) and Regenerate cost money
+- A **section picker was considered and rejected**: it would save only about $0.13, and adding a section later pays the cache write again
+- Use **Sonnet, not Haiku**, for narrative quality; the savings are small next to a worse story
+- The **daily limit** is set with `DAILY_STORY_LIMIT` (default 5), which caps worst-case daily spend
+- SEC EDGAR is free, so the Story's model calls are the only variable cost
+
+---
+
+## If This Is Ever Productized
+
+Not planned, but if the app is ever sold or opened to other users:
+
+- **Auth:** replace the single-user login with a managed provider such as Clerk rather than hand-rolling multi-user auth. Derive `user_id` from the verified session, never from the client, and migrate the existing `'local'` rows to the real user id
+- **Money:** add per-user cost limits and a paid plan. Today `narrative_usage` is keyed by `user_id`, so per-user caps are a small step, but nothing bills anyone
+- **Shared data:** make `company_financials` and `company_narratives` **global**, not per-user. SEC filings are the same for everyone, so each story is paid for once and every user reads it free
+- **Before opening signups:** add rate limiting beyond the login lockout, error monitoring, and a pen test, including IDOR checks with a second account
+- **Legal:** add terms of service and a "not financial advice" page, and check licensing before redistributing any paid data source (EDGAR itself is public, but a paid provider such as FMP's paid tier may restrict redistribution)
+- **Keep the groundwork in place:** keep every query filtered by `user_id`, keep the login code isolated in `api/_auth.js` so it can be swapped, and keep all secrets in env vars
 
 ---
 
 ## Later / Optional
 
 - **User-written moat notes** per company, saved to the DB (the Story tab's moat assessment is AI-generated; personal notes are not built)
-- **Public access (formerly Phase 4):** a public calculator with no login and no save, plus saved valuations and notes for logged-in users, on top of the Clerk work above. Ties into the personal finance website concept (separate project)
+- **Public access (formerly Phase 4):** a public calculator with no login and no save, plus saved valuations and notes for logged-in users, which would need the managed auth provider from "If This Is Ever Productized". Ties into the personal finance website concept (separate project)
 - **FMP paid upgrade** if EDGAR's coverage or speed becomes the bottleneck for screening
 
 ---
 
 ## Data Model (Neon / Postgres)
 
-All tables carry a `user_id`. Today it is the constant `'local'`, set server-side and never read from the client; it becomes the Clerk-derived id with the auth work above.
+All tables carry a `user_id`. Today it is the constant `'local'`, set server-side and never read from the client; it would become the managed provider's session-derived id if the app ever goes multi-user.
 
 ```sql
 -- Saved DCF valuations
@@ -200,8 +232,16 @@ CREATE TABLE narrative_usage (
   PRIMARY KEY (user_id, day)
 );
 
+-- Failed login attempts, for the per-IP lockout (5 failures / 15 minutes). Cleared on success.
+CREATE TABLE login_attempts (
+  id           SERIAL PRIMARY KEY,
+  ip           TEXT NOT NULL,
+  attempted_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_login_attempts_ip ON login_attempts(ip, attempted_at);
+
 -- Row-level: always filter WHERE user_id = $1 using the server-derived value.
--- The three new tables are created on first request, matching how `valuations` is created.
+-- The new tables are created on first request, matching how `valuations` is created.
 ```
 
 ---
@@ -211,15 +251,15 @@ CREATE TABLE narrative_usage (
 | Layer | Choice | Notes |
 |---|---|---|
 | Frontend | Vanilla JS (ES modules) | Matches Financinator 5000 patterns; all user and model text rendered via `textContent` |
-| Hosting | Vercel | Serverless `api/` routes; `api/narrative.js` has `maxDuration` 300 |
+| Hosting | Vercel, at stocks.financinator.online | Serverless `api/` routes; `api/narrative.js` has `maxDuration` 300; helpers in `api/` are underscore-prefixed |
 | Database | Neon (Postgres) | Free tier, more projects than Supabase |
-| Auth | Shared access key (Story only) for now | **Clerk (planned)** replaces it, with sign-ups locked to the owner's email |
+| Auth | Single-user login: `APP_USERNAME`/`APP_PASSWORD`, HMAC-signed 30-day session cookie (`HttpOnly`, `SameSite=Strict`), Neon-backed lockout (5 failures / 15 min / IP); every `api/` route calls `requireAuth`; cookie is host-only unless `COOKIE_DOMAIN` is set | A managed provider (e.g. Clerk) only if multi-user happens |
 | Fundamentals data | SEC EDGAR (XBRL `companyfacts`, submissions, filing documents) | Free, no key; needs `SEC_USER_AGENT`; throttled to ~5 req/s |
 | AI | Anthropic API (Messages) | Default model `claude-sonnet-5-5`, overridable via `ANTHROPIC_MODEL`; prompt caching on the shared filing text |
 | Ticker lookup | FMP free tier | Company-name auto-fill only. Paid tier is an optional later upgrade |
 | Design system | Financinator 5000 tokens | Exact hex values, same fonts |
 
-Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_ACCESS_KEY`, optional `ANTHROPIC_MODEL` and `DAILY_STORY_LIMIT` (default 5).
+Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), and `COOKIE_DOMAIN` (unset = host-only cookie).
 
 ---
 
@@ -235,11 +275,11 @@ Done:
 
 Next (see Next Up above):
 
-6. Clerk auth
-7. News-context section
-8. In-app AI chat
-9. Metric refinements
-10. Screener across cached companies
+6. News-context section
+7. In-app AI chat (with a message cap)
+8. Metric refinements
+9. Screener across cached companies
+10. Managed auth provider, only if multi-user happens
 
 ---
 

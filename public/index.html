@@ -11,17 +11,21 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
-<body>
+<body class="locked">
+  <div id="login-screen" class="login-screen" hidden></div>
   <nav class="nav">
     <div class="brand">
       <img src="/logo-lockup.svg" alt="Stockinator 5000" height="28">
     </div>
-    <div class="nav-tabs">
-      <button class="nav-tab" id="tab-calculator">Calculator</button>
-      <button class="nav-tab" id="tab-filings">Filings</button>
-      <button class="nav-tab" id="tab-valuations">Saved Valuations</button>
-      <button class="nav-tab disabled" disabled title="Coming soon">Screener</button>
-      <button class="nav-tab disabled" disabled title="Coming soon">Research</button>
+    <div class="nav-right">
+      <div class="nav-tabs">
+        <button class="nav-tab" id="tab-calculator">Calculator</button>
+        <button class="nav-tab" id="tab-filings">Filings</button>
+        <button class="nav-tab" id="tab-valuations">Saved Valuations</button>
+        <button class="nav-tab disabled" disabled title="Coming soon">Screener</button>
+        <button class="nav-tab disabled" disabled title="Coming soon">Research</button>
+      </div>
+      <button class="nav-signout" id="signout" type="button">Sign Out</button>
     </div>
   </nav>
   <main class="content" id="app"></main>
