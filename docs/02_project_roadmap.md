@@ -38,6 +38,7 @@ This is a research tool — no payments flow through it. It is initially single-
 | **Phase 1 — DCF Calculator** | **Done.** Calculator, step-by-step breakdown, saved valuations (Neon), FMP ticker auto-fill for company name, logo/branding |
 | **Filings tab** (was Phase 2/3) | **Done.** SEC EDGAR XBRL data, 10-year metrics table, screener scorecard, trend charts, Send to Calculator, Neon cache |
 | **Story sub-tab** | **Done.** AI narrative from the latest annual filing |
+| **News sub-tab** | **Done.** "Why is the stock moving": web-search news context plus recent 8-K/6-K filings, labeled amber "NEWS CONTEXT, NOT FROM FILINGS" |
 | Auth | **Single-user login done** (username/password, signed session cookie, DB-backed lockout). Multi-user auth (Clerk) not built; `user_id` is still the hardcoded `'local'` |
 | Cross-company screener | Not built (see Next Up) |
 
@@ -75,6 +76,18 @@ An AI-written narrative of the business, generated from the latest annual filing
 - **Cache:** `company_narratives` in Neon. A story is reused until a newer filing appears or Regenerate is clicked
 - **Protection:** requests need a valid login session like every other route, and generations are capped per day (default 5, set with `DAILY_STORY_LIMIT`; tracked in `narrative_usage`)
 
+### News sub-tab (done)
+
+News context for why a stock has been moving. It is kept visually and textually separate from filing-derived data: every card carries an amber "News context" tag.
+
+- **Inputs (`api/news.js`):** company name and ticker, a few key metrics from `company_financials`, the company's 8-K filings (6-K for foreign filers) from the last 120 days with item codes, and a server-computed price summary (start, end, high, low, largest daily moves) when available. For 6-K filers, the top of each of the 6 most recent press-release exhibits is read as a headline, since 6-Ks have no item codes
+- **Price data:** FMP's current free `historical-price-eod/light` endpoint, which covers some symbols (V, KO, AAPL, XOM, JPM, TSM) but not others (B, NEM, BRK-B, SHEL return 402). When it isn't available the model is told so explicitly, price context must come from a cited source or read "Not available", and the UI says so
+- **Model run:** the Anthropic Messages API with the web search server tool, capped at 5 searches, default model `claude-sonnet-5-5`. The basic `web_search_20250305` tool is used, not the newer dynamic-filtering variant: on Barrick the newer one ran 5 searches and surfaced one readable article, while the basic one used 2 searches and returned drivers, analyst actions and catalysts at the same cost
+- **Output:** structured JSON (summary, price context, 1 to 3 external drivers, company events, analyst actions, upcoming catalysts, unknowns), each item tagged fact or interpretation, with a confidence on every interpretation. The model first identifies the stock's main external drivers (gold for a miner, crude for an oil company, rates for a bank) and searches those as well as the company
+- **Source checking:** a cited URL is kept only if it appeared in the search results the model actually received (or is a supplied SEC filing URL). Fabricated URLs are dropped, and any item left with no verifiable source is dropped rather than shown
+- **Cache and limits:** `company_news` in Neon, reused for 12 hours until Refresh is clicked. Runs are capped per day (default 10, `DAILY_NEWS_LIMIT`; tracked in `news_usage`)
+- **Cost:** measured at about $0.10 per run on Barrick (two runs: $0.103 and $0.105 estimated, 21 to 36 seconds). The cost is estimated from logged token counts and a per-search fee, and is stored with each run
+
 ---
 
 ## Data Strategy
@@ -100,18 +113,13 @@ An AI-written narrative of the business, generated from the latest annual filing
 
 In this order:
 
-### 1. News-context section ("why is the stock moving")
-
-- A section that summarizes recent news around a ticker
-- Clearly labeled as separate from filing data, with its own sources and dates, so news context is never mistaken for facts from the filing
-
-### 2. In-app AI chat
+### 1. In-app AI chat
 
 - Ask questions about a company inside the app
 - Reuses the stored metrics and narratives as context instead of re-fetching, keeping cost and latency low
 - **Message cap** per day (like `DAILY_STORY_LIMIT`), since chat is the costliest feature: every turn re-reads the context and replies are open-ended
 
-### 3. Metric refinements
+### 2. Metric refinements
 
 - **Attributable FCF** after minority interests
 - **Non-recurring gain adjustment** (e.g. gains on asset sales) when judging earnings consistency
@@ -119,13 +127,13 @@ In this order:
 - **FCF/share from cover-page share counts** (the `dei` share count), to fill the gap for per-share-class companies like Visa
 - **Debt-to-equity on attributable equity** rather than total equity including non-controlling interests
 
-### 4. Screener across cached companies
+### 3. Screener across cached companies
 
 - Run the core and optional rules across every company already in `company_financials`
 - Filter panel with a toggle and threshold per rule; results table with the metric values and Pass/Fail per rule
 - Click any ticker to open it in Filings or send it to the calculator
 
-### 5. Managed auth provider (only if multi-user happens)
+### 4. Managed auth provider (only if multi-user happens)
 
 - Optional. The single-user login is enough for personal use; see "If This Is Ever Productized" below for what moving to a managed provider involves
 
@@ -224,6 +232,28 @@ CREATE TABLE company_narratives (
   UNIQUE (user_id, cik, accession)
 );
 
+-- News context (News sub-tab). One row per company, refreshed after 12 hours.
+CREATE TABLE company_news (
+  id             SERIAL PRIMARY KEY,
+  user_id        TEXT NOT NULL DEFAULT 'local',
+  cik            TEXT NOT NULL,
+  ticker         TEXT,
+  result         JSONB NOT NULL,
+  model          TEXT,
+  searches_used  INT,
+  cost_estimate  NUMERIC,                       -- estimated USD for the run
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (user_id, cik)
+);
+
+-- Daily cap on news runs (default 10/day, DAILY_NEWS_LIMIT)
+CREATE TABLE news_usage (
+  user_id TEXT NOT NULL,
+  day     DATE NOT NULL,
+  count   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+
 -- Daily cap on story generations (default 5/day, DAILY_STORY_LIMIT)
 CREATE TABLE narrative_usage (
   user_id TEXT NOT NULL,
@@ -259,7 +289,7 @@ CREATE INDEX idx_login_attempts_ip ON login_attempts(ip, attempted_at);
 | Ticker lookup | FMP free tier | Company-name auto-fill only. Paid tier is an optional later upgrade |
 | Design system | Financinator 5000 tokens | Exact hex values, same fonts |
 
-Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), and `COOKIE_DOMAIN` (unset = host-only cookie).
+Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), `DAILY_NEWS_LIMIT` (default 10), and `COOKIE_DOMAIN` (unset = host-only cookie).
 
 ---
 
@@ -272,10 +302,10 @@ Done:
 3. FMP ticker auto-fill and branding
 4. Filings tab: SEC EDGAR metrics, scorecard, charts, Send to Calculator
 5. Story sub-tab: filing text extraction, then per-section AI generation
+6. News sub-tab: recent SEC 8-K/6-K filings, price history where available, and web-search news context
 
 Next (see Next Up above):
 
-6. News-context section
 7. In-app AI chat (with a message cap)
 8. Metric refinements
 9. Screener across cached companies

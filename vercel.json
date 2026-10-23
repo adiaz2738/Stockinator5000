@@ -1,6 +1,7 @@
 {
   "functions": {
-    "api/narrative.js": { "maxDuration": 300 }
+    "api/narrative.js": { "maxDuration": 300 },
+    "api/news.js": { "maxDuration": 300 }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },

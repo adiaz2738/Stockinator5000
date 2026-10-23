@@ -302,6 +302,7 @@ Environment variables the app needs (all server-side; set them in Vercel, then p
 | `SESSION_SECRET` | Signs the session cookie. At least 32 random characters, e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Changing it signs everyone out |
 | `ANTHROPIC_MODEL` (optional) | Defaults to `claude-sonnet-5-5` |
 | `DAILY_STORY_LIMIT` (optional) | Story generations per day, default 5 |
+| `DAILY_NEWS_LIMIT` (optional) | News-context runs per day, default 10. Each run uses web search (about $0.10) |
 | `COOKIE_DOMAIN` (optional) | Leave unset for a host-only session cookie (the default). Set e.g. `.financinator.online` only to share one login across subdomains, which also means sharing `SESSION_SECRET` with the other app |
 
 If `SESSION_SECRET` is missing or too short, every route returns 401 (it fails closed). Failed logins are tracked per IP in Neon (`login_attempts`): five failures within 15 minutes locks that IP out for the rest of the window.

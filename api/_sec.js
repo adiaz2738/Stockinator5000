@@ -429,6 +429,119 @@ export async function findLatestAnnualFiling(cik) {
   };
 }
 
+const CURRENT_REPORT_FORMS = new Set(['8-K', '8-K/A', '6-K', '6-K/A']);
+
+// Meaning of the most common 8-K item codes, so downstream text can say what a filing was about.
+const ITEM_DESCRIPTIONS = {
+  '1.01': 'Entry into a material definitive agreement',
+  '1.02': 'Termination of a material definitive agreement',
+  '1.03': 'Bankruptcy or receivership',
+  '2.01': 'Completion of acquisition or disposition of assets',
+  '2.02': 'Results of operations and financial condition',
+  '2.03': 'Creation of a direct financial obligation',
+  '2.04': 'Triggering events that accelerate a financial obligation',
+  '2.05': 'Costs associated with exit or disposal activities',
+  '2.06': 'Material impairments',
+  '3.01': 'Notice of delisting or failure to satisfy a listing rule',
+  '3.02': 'Unregistered sales of equity securities',
+  '3.03': 'Material modification to rights of security holders',
+  '4.01': 'Change in certifying accountant',
+  '4.02': 'Non-reliance on previously issued financial statements',
+  '5.01': 'Changes in control of registrant',
+  '5.02': 'Departure or appointment of directors or officers',
+  '5.03': 'Amendments to articles or bylaws',
+  '5.07': 'Submission of matters to a vote of security holders',
+  '7.01': 'Regulation FD disclosure',
+  '8.01': 'Other events',
+  '9.01': 'Financial statements and exhibits',
+};
+
+// 8-K (domestic) and 6-K (foreign private issuer) filings from the last `days` days, newest first:
+// [{ form, filingDate, accession, items: [{ code, description }], description, url }].
+// 6-Ks carry no item codes, so `description` (SEC's own document label) is the only hint there.
+export async function listRecentCurrentReports(cik, days = 120) {
+  if (!CIK_RE.test(cik)) throw new Error('invalid cik');
+  const padded = cik.padStart(10, '0');
+  const res = await secFetch(`https://data.sec.gov/submissions/CIK${padded}.json`);
+  if (!res.ok) throw new Error(`SEC submissions request failed with status ${res.status}`);
+  const rc = (await res.json())?.filings?.recent;
+  if (!rc) return [];
+
+  const cutoff = new Date(Date.now() - days * DAY).toISOString().slice(0, 10);
+  const out = [];
+  for (let i = 0; i < rc.form.length; i++) {
+    if (rc.filingDate[i] < cutoff) break; // `recent` is newest first
+    if (!CURRENT_REPORT_FORMS.has(rc.form[i])) continue;
+    const accession = rc.accessionNumber[i];
+    out.push({
+      form: rc.form[i],
+      filingDate: rc.filingDate[i],
+      accession,
+      items: String(rc.items?.[i] || '').split(',').map((c) => c.trim()).filter(Boolean)
+        .map((code) => ({ code, description: ITEM_DESCRIPTIONS[code] || null })),
+      description: rc.primaryDocDescription?.[i] || null,
+      url: `${ARCHIVES}/${parseInt(padded, 10)}/${accession.replace(/-/g, '')}/${rc.primaryDocument[i]}`,
+    });
+  }
+  return out;
+}
+
+const HEADLINE_MAX_BYTES = 120000; // read only the start of an exhibit; the headline is at the top
+const HEADLINE_MAX_CHARS = 400;
+const HEADLINE_BOILERPLATE = /^(exhibit\b|united states|securities and exchange|washington|form\s+6-k|report of foreign|for the month|commission file|indicate by check|\(|signature|table of contents|news release|press release$|pursuant to rule|cover of form|of the securities exchange act|of registrant as specified|\d{4}$)|registrant as specified|principal executive offices|\(?exact name of/i;
+
+// Reads at most `maxBytes` of a document, then stops the download.
+async function readDocumentStart(url, maxBytes) {
+  const res = await secFetch(url, 'text/html');
+  if (!res.ok || !res.body) return null;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.length;
+  }
+  await reader.cancel().catch(() => {});
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+// First few real lines of a document, skipping cover-page boilerplate.
+function headlineFromHtml(html) {
+  const lines = htmlToText(html).split('\n').filter((l) => l.length >= 25 && !HEADLINE_BOILERPLATE.test(l));
+  return lines.slice(0, 3).join(' | ').slice(0, HEADLINE_MAX_CHARS) || null;
+}
+
+// 6-K filings have no item codes, so read the top of each one's press-release exhibit (EX-99.x) to
+// say what it was about. Only the `max` most recent 6-Ks are read; 8-K filings are left untouched.
+export async function addCurrentReportHeadlines(reports, max = 6) {
+  const out = reports.map((r) => ({ ...r }));
+  let read = 0;
+  for (const r of out) {
+    if (read >= max) break;
+    if (!r.form.startsWith('6-K')) continue;
+    read++;
+    try {
+      const base = r.url.slice(0, r.url.lastIndexOf('/'));
+      let target = r.url;
+      const idx = await secFetch(`${base}/index.json`);
+      if (idx.ok) {
+        const names = ((await idx.json())?.directory?.item || []).map((it) => it.name).filter((n) => /\.html?$/i.test(n));
+        const exhibits = names.filter((n) => /ex[-_]?99/i.test(n)).sort((a, b) => a.length - b.length || a.localeCompare(b));
+        const preferred = exhibits.find((n) => /ex[-_]?99[-_.]?0?1(?!\d)/i.test(n)) || exhibits[0];
+        if (preferred) target = `${base}/${preferred}`;
+      }
+      const html = await readDocumentStart(target, HEADLINE_MAX_BYTES);
+      r.headline = html ? headlineFromHtml(html) : null;
+    } catch (err) {
+      console.error('6-K headline lookup failed:', err);
+      r.headline = null;
+    }
+  }
+  return out;
+}
+
 // Documents in a filing: [{ name, type, size }]. Sizes come from index.json; document types
 // (EX-99.1, EX-13...) only appear on the -index.htm page, so both are read.
 export async function listFilingDocuments(filing) {

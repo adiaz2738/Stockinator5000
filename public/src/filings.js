@@ -1,4 +1,5 @@
 import { renderStoryPane } from './story.js';
+import { renderNewsPane } from './news.js';
 
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 
@@ -365,23 +366,28 @@ export function renderFilings(container, { onSendToCalculator }) {
   ]);
   const results = el('div', { class: 'filings-results' });
   const storyPane = el('div', { class: 'filings-results' });
+  const newsPane = el('div', { class: 'filings-results' });
   const subMetrics = el('button', { class: 'sub-tab', text: 'Metrics', attrs: { type: 'button' } });
   const subStory = el('button', { class: 'sub-tab', text: 'Story', attrs: { type: 'button' } });
-  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStory]);
-  container.append(searchCard, subTabs, results, storyPane);
+  const subNews = el('button', { class: 'sub-tab sub-tab-news', text: 'News', attrs: { type: 'button' } });
+  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStory, subNews]);
+  container.append(searchCard, subTabs, results, storyPane, newsPane);
 
   function showSubTab(name) {
     activeSubTab = name;
     subMetrics.classList.toggle('active', name === 'metrics');
     subStory.classList.toggle('active', name === 'story');
+    subNews.classList.toggle('active', name === 'news');
     results.hidden = name !== 'metrics';
     storyPane.hidden = name !== 'story';
-    if (name === 'story') {
-      renderStoryPane(storyPane, { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null });
-    }
+    newsPane.hidden = name !== 'news';
+    const paneArgs = { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null };
+    if (name === 'story') renderStoryPane(storyPane, paneArgs);
+    if (name === 'news') renderNewsPane(newsPane, paneArgs);
   }
   subMetrics.addEventListener('click', () => showSubTab('metrics'));
   subStory.addEventListener('click', () => showSubTab('story'));
+  subNews.addEventListener('click', () => showSubTab('news'));
 
   // Metrics for whatever is in the search box, loading them first when they aren't loaded yet
   async function ensureData() {
