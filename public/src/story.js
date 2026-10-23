@@ -1,5 +1,4 @@
 const ACCESS_KEY_STORAGE = 'stockinatorAccessKey';
-const DAILY_LIMIT = 10;
 
 const SECTION_TITLES = {
   business_summary: 'Business Summary',
@@ -191,7 +190,10 @@ function updateButton() {
 
 function failMessage(r) {
   if (r.status === 401) return 'Access key was not accepted.';
-  if (r.status === 429) return `Daily limit of ${DAILY_LIMIT} story generations reached. Try again tomorrow.`;
+  if (r.status === 429) {
+    const limit = Number.isInteger(r.data?.dailyLimit) ? `${r.data.dailyLimit} ` : '';
+    return `Daily limit of ${limit}story generations reached. Try again tomorrow.`;
+  }
   if (r.status === 404 || r.status === 409 || r.status === 422) return typeof r.data?.error === 'string' ? r.data.error : 'Could not generate a story for this company.';
   return 'Could not generate the story. Please try again.';
 }
@@ -265,7 +267,7 @@ export function renderStoryPane(pane, { ensureData, getCurrentCik }) {
       el('div', { class: 'story-intro', text: 'An AI-written narrative of the business, built from the latest annual SEC filing and the stored 10-year metrics. Each point is tagged with where it came from and whether it is fact or interpretation.' }),
       el('div', { class: 'story-actions' }, [
         button,
-        el('span', { class: 'story-hint', text: `Each new story uses 1 of ${DAILY_LIMIT} daily generations. Existing stories reload free.` }),
+        el('span', { class: 'story-hint', text: 'Each new story uses one of your limited daily generations. Existing stories reload free.' }),
       ]),
       progress,
       error,
