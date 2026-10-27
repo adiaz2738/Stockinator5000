@@ -304,6 +304,167 @@ function extractForTaxonomy(facts, taxonomy) {
 const round = (n, d = 4) => (n === null || !Number.isFinite(n) ? null : Number(n.toFixed(d)));
 const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 
+// ---------- Data-quality checks (scale errors) ----------
+// Some filers tag a value in millions or thousands but label the unit "shares" or "USD" without applying
+// the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
+
+// Bump when extraction logic changes so cached rows in Neon refetch.
+export const DATA_VERSION = 2;
+
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const SCALE_POWERS = [3, 6, -3, -6];
+// Tolerance for "reported shares vs net income / diluted EPS": covers EPS rounding, preferred dividends, etc.
+const SHARES_OK_MIN = 0.5;
+const SHARES_OK_MAX = 2;
+// EPS this small is mostly rounding, so net income / EPS says nothing reliable
+const MIN_ABS_EPS_FOR_CHECK = 0.05;
+// Dollar series that stay clearly away from zero; others (net income, cash flow, equity, retained earnings...)
+// legitimately pass near zero, where a 1000x "outlier" is real, so they are never rescaled.
+const OUTLIER_CHECK_KEYS = ['revenue', 'costOfRevenue', 'sga', 'rnd', 'depreciation', 'currentAssets', 'currentLiabilities', 'totalLiabilities', 'netReceivables', 'capex', 'dilutedShares'];
+
+// ratio ~ 10^k for k in {3, 6, -3, -6} (within about a factor of 2.2), else null
+function scalePower(ratio) {
+  if (!(ratio > 0) || !Number.isFinite(ratio)) return null;
+  const l = Math.log10(ratio);
+  return SCALE_POWERS.find((k) => Math.abs(l - k) < 0.35) ?? null;
+}
+
+const rescale = (v, k) => Number((v * 10 ** -k).toPrecision(12));
+const median = (arr) => {
+  const s = [...arr].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const fmtFactor = (k) => `×${(10 ** -k).toLocaleString('en-US', { maximumFractionDigits: 6 })}`;
+const fmtYearRanges = (ys) => {
+  const s = [...new Set(ys)].sort((a, b) => a - b);
+  const parts = [];
+  for (let i = 0; i < s.length; i++) {
+    let j = i;
+    while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+    parts.push(j > i ? `${s[i]}–${s[j]}` : `${s[i]}`);
+    i = j;
+  }
+  return parts.join(', ');
+};
+
+// Diluted shares must agree with net income / diluted EPS. ~1,000x or 1,000,000x off -> rescale (and say so);
+// any other large disagreement -> N/A. Never guesses.
+function checkDilutedShares(raw, years, quality) {
+  for (let i = 0; i < years.length; i++) {
+    const sh = raw.dilutedShares[i];
+    const ni = raw.netIncome[i];
+    const eps = raw.epsDiluted[i];
+    if (!isNum(sh) || sh <= 0 || !isNum(ni) || !isNum(eps) || Math.abs(eps) < MIN_ABS_EPS_FOR_CHECK) continue;
+    const implied = ni / eps;
+    if (!(implied > 0)) continue;
+    const ratio = sh / implied;
+    if (ratio >= SHARES_OK_MIN && ratio <= SHARES_OK_MAX) continue;
+
+    const k = scalePower(ratio);
+    if (k !== null) {
+      const fixed = Math.round(rescale(sh, k));
+      const after = fixed / implied;
+      if (after >= SHARES_OK_MIN && after <= SHARES_OK_MAX) {
+        raw.dilutedShares[i] = fixed;
+        quality.rescaled.push({
+          metric: 'dilutedShares', year: years[i], from: sh, to: fixed, factor: 10 ** -k,
+          reason: `Reported as ${sh.toLocaleString('en-US')} but net income ÷ diluted EPS implies about ${Math.round(implied).toLocaleString('en-US')}; rescaled ${fmtFactor(k)}`,
+        });
+        continue;
+      }
+    }
+    raw.dilutedShares[i] = null;
+    quality.nulled.push({
+      metric: 'dilutedShares', year: years[i],
+      reason: `Reported ${sh.toLocaleString('en-US')} disagrees with net income ÷ diluted EPS (about ${Math.round(implied).toLocaleString('en-US')}) by a factor of ${ratio.toPrecision(3)}, so it is not shown`,
+    });
+  }
+}
+
+// A value ~1,000x or 1,000,000x away from every other year's level, while those other years agree with each other.
+function checkScaleOutliers(raw, years, quality) {
+  for (const key of OUTLIER_CHECK_KEYS) {
+    const vals = raw[key];
+    const idx = vals.map((v, i) => (isNum(v) && v !== 0 ? i : -1)).filter((i) => i >= 0);
+    if (idx.length < 5) continue;
+    for (const i of idx) {
+      const others = idx.filter((j) => j !== i).map((j) => Math.abs(vals[j]));
+      const med = median(others);
+      const agreeing = others.filter((o) => o / med < 10 && med / o < 10).length;
+      if (agreeing < Math.max(3, Math.ceil(others.length * 0.6))) continue;
+      const k = scalePower(Math.abs(vals[i]) / med);
+      if (k === null) continue;
+      const fixed = rescale(vals[i], k);
+      quality.rescaled.push({
+        metric: key, year: years[i], from: vals[i], to: fixed, factor: 10 ** -k,
+        reason: `Reported ${vals[i].toLocaleString('en-US')} is about ${(10 ** Math.abs(k)).toLocaleString('en-US')}x ${k > 0 ? 'larger' : 'smaller'} than every other year; rescaled ${fmtFactor(k)}`,
+      });
+      vals[i] = fixed;
+    }
+  }
+}
+
+// Latest fiscal year only: if no diluted share count survived, use the cover-page shares outstanding (dei).
+function fillLatestSharesFromCoverPage(facts, res, raw, years, quality) {
+  const last = years.length - 1;
+  if (last < 0 || isNum(raw.dilutedShares[last])) return;
+  const entries = facts?.facts?.dei?.EntityCommonStockSharesOutstanding?.units?.shares;
+  if (!Array.isArray(entries)) return;
+
+  let fyEnd = null;
+  for (const key of METRIC_KEYS) {
+    const end = res.out[key].values.get(years[last])?.end;
+    if (end && (!fyEnd || end > fyEnd)) fyEnd = end;
+  }
+  if (!fyEnd) return;
+  const cover = entries
+    .filter((f) => ANNUAL_FORMS.has(f.form) && isNum(f.val) && f.val > 0 && f.end >= fyEnd
+      && (Date.parse(f.filed) - Date.parse(fyEnd)) / DAY < 400)
+    .sort((a, b) => (a.filed < b.filed ? 1 : a.filed > b.filed ? -1 : a.end < b.end ? 1 : -1))[0];
+  if (!cover) return;
+
+  const ni = raw.netIncome[last];
+  const eps = raw.epsDiluted[last];
+  if (isNum(ni) && isNum(eps) && Math.abs(eps) >= MIN_ABS_EPS_FOR_CHECK && ni / eps > 0) {
+    const ratio = cover.val / (ni / eps);
+    if (ratio < SHARES_OK_MIN || ratio > SHARES_OK_MAX) return; // implausible against EPS: don't use
+  }
+  raw.dilutedShares[last] = cover.val;
+  quality.derived.push({
+    metric: 'dilutedShares', year: years[last], value: cover.val,
+    reason: `Derived from the cover-page shares outstanding (${cover.val.toLocaleString('en-US')} as of ${cover.end}), not the weighted-average diluted count`,
+  });
+}
+
+// Plain-text lines for the company header's data-quality note.
+function buildQualitySummary(quality, years) {
+  const out = [];
+  const label = { dilutedShares: 'diluted shares' };
+  const name = (m) => label[m] || m.replace(/([A-Z])/g, ' $1').toLowerCase();
+
+  const groups = new Map();
+  for (const r of quality.rescaled) {
+    const key = `${r.metric}|${r.factor}`;
+    if (!groups.has(key)) groups.set(key, { metric: r.metric, factor: r.factor, years: [] });
+    groups.get(key).years.push(r.year);
+  }
+  for (const g of groups.values()) {
+    out.push(`${name(g.metric)} rescaled ${g.factor >= 1 ? '×' : '÷'}${(g.factor >= 1 ? g.factor : 1 / g.factor).toLocaleString('en-US')} for ${fmtYearRanges(g.years)} (the filing's value was off by that scale)`);
+  }
+  const nulls = new Map();
+  for (const n of quality.nulled) {
+    if (!nulls.has(n.metric)) nulls.set(n.metric, []);
+    nulls.get(n.metric).push(n.year);
+  }
+  for (const [m, ys] of nulls) out.push(`${name(m)} N/A for ${fmtYearRanges(ys)} (disagreed with net income ÷ EPS)`);
+  for (const d of quality.derived) out.push(`${name(d.metric)} for ${d.year} derived from the cover-page share count`);
+
+  const fcfNa = Object.keys(quality.cellNotes.fcfPerShare || {}).map(Number);
+  if (fcfNa.length) out.push(`FCF/share N/A for ${fmtYearRanges(fcfNa)} (hover the cell for why)`);
+  return out;
+}
+
 // Builds the metrics document stored in Neon and returned to the client.
 export function buildMetrics(facts) {
   const candidates = ['us-gaap', 'ifrs-full']
@@ -323,6 +484,19 @@ export function buildMetrics(facts) {
   for (const key of METRIC_KEYS) {
     raw[key] = years.map((fy) => res.out[key].values.get(fy)?.value ?? null);
   }
+
+  // Scale checks run on the extracted values, before any ratio is computed from them.
+  const quality = { rescaled: [], nulled: [], derived: [], cellNotes: {}, summary: [] };
+  checkDilutedShares(raw, years, quality);
+  checkScaleOutliers(raw, years, quality);
+  fillLatestSharesFromCoverPage(facts, res, raw, years, quality);
+  const noteCell = (metric, year, text) => {
+    quality.cellNotes[metric] = quality.cellNotes[metric] || {};
+    if (!quality.cellNotes[metric][year]) quality.cellNotes[metric][year] = text;
+  };
+  for (const r of quality.rescaled) noteCell(r.metric, r.year, r.reason);
+  for (const n of quality.nulled) noteCell(n.metric, n.year, n.reason);
+  for (const d of quality.derived) noteCell(d.metric, d.year, d.reason);
 
   // Gross profit: use the reported figure; else revenue - cost of revenue (both reported).
   const grossProfit = years.map((_, i) => {
@@ -358,7 +532,21 @@ export function buildMetrics(facts) {
     derived.currentRatio.push(round(div(at('currentAssets', i), at('currentLiabilities', i))));
     derived.roe.push(equity !== null && equity > 0 ? round(div(ni, equity)) : null);
     derived.fcf.push(fcf);
-    derived.fcfPerShare.push(round(div(fcf, at('dilutedShares', i)), 4));
+    // FCF/share is N/A (with a reason) rather than a number that fails a sanity check
+    const shares = at('dilutedShares', i);
+    let fcfPerShare = null;
+    if (fcf !== null) {
+      if (!isNum(shares) || shares <= 0) {
+        noteCell('fcfPerShare', years[i], quality.cellNotes.dilutedShares?.[years[i]] || 'Diluted share count is not available for this year, so FCF per share cannot be computed');
+      } else {
+        fcfPerShare = fcf / shares;
+        if (isNum(eps) && eps > 0 && fcfPerShare > 10 * eps) {
+          noteCell('fcfPerShare', years[i], `FCF per share would be ${fcfPerShare.toFixed(2)}, more than 10x diluted EPS (${eps}), which points to a data scale problem, so it is not shown`);
+          fcfPerShare = null;
+        }
+      }
+    }
+    derived.fcfPerShare.push(round(fcfPerShare, 4));
     derived.epsGrowth.push(eps !== null && prevEps !== null && prevEps > 0 ? round((eps - prevEps) / prevEps) : null);
   });
 
@@ -379,9 +567,13 @@ export function buildMetrics(facts) {
   const tags = {};
   for (const key of METRIC_KEYS) tags[key] = res.out[key].tags;
 
+  quality.summary = buildQualitySummary(quality, years);
+
   return {
+    dataVersion: DATA_VERSION,
     taxonomy,
     currency: res.currency,
+    quality,
     years,
     raw: { ...raw, grossProfit },
     grossProfitDerived,

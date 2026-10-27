@@ -630,3 +630,9 @@ body.locked #app { display: none; }
 .news-source-link:hover { background: var(--blue-glow-strong); }
 .progress-indeterminate { width: 35%; animation: news-slide 1.4s ease-in-out infinite; }
 @keyframes news-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+/* ---------- Data-quality cell notes ---------- */
+table.fin-table td.cell-note,
+table.fin-table td.cell-adjusted { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+table.fin-table td.cell-note { text-decoration-color: var(--text-3); }
+table.fin-table td.cell-adjusted { text-decoration-color: var(--yellow); }

@@ -190,17 +190,37 @@ function tableCard(m) {
     ]],
   ];
 
+  // Which metric a row shows, found by the series it was built from (used to look up data-quality notes)
+  const keyOfSeries = new Map();
+  for (const [k, series] of Object.entries(r)) keyOfSeries.set(series, k);
+  for (const [k, series] of Object.entries(d)) keyOfSeries.set(series, k);
+
+  // Display order only: newest fiscal year first. The stored series stay oldest to newest.
+  const newestFirst = m.years.map((_, i) => i).reverse();
+
   const thead = el('thead', {}, el('tr', {}, [
     el('th', { text: 'Fiscal year' }),
-    ...m.years.map((y) => el('th', { text: String(y) })),
+    ...newestFirst.map((i) => el('th', { text: String(m.years[i]) })),
   ]));
   const tbody = el('tbody');
   for (const [title, rows] of groups) {
-    tbody.append(el('tr', { class: 'group-row' }, el('td', { text: title, attrs: { colspan: String(m.years.length + 1) } })));
+    // A single colspan cell is as wide as the whole row, so it can't stay pinned while scrolling.
+    // Split it: a sticky label cell (the same first-column cell as the metric names) plus a filler.
+    tbody.append(el('tr', { class: 'group-row' }, [
+      el('td', { text: title }),
+      el('td', { class: 'group-fill', attrs: { colspan: String(m.years.length) } }),
+    ]));
     for (const [label, values, fmt] of rows) {
+      const metricKey = keyOfSeries.get(values);
       tbody.append(el('tr', {}, [
         el('td', { text: label }),
-        ...values.map((v) => el('td', { class: isNum(v) ? '' : 'na', text: isNum(v) ? fmt(v) : NA })),
+        ...newestFirst.map((i) => {
+          const v = values[i];
+          // Rescaled or derived values and N/A-with-a-reason cells explain themselves on hover
+          const note = metricKey ? m.quality?.cellNotes?.[metricKey]?.[m.years[i]] : null;
+          const cls = [isNum(v) ? '' : 'na', note ? (isNum(v) ? 'cell-adjusted' : 'cell-note') : ''].filter(Boolean).join(' ');
+          return el('td', { class: cls, text: isNum(v) ? fmt(v) : NA, attrs: note ? { title: note } : {} });
+        }),
       ]));
     }
   }
@@ -208,6 +228,11 @@ function tableCard(m) {
     el('div', { class: 'section-label', text: `10-Year Financials (${c || 'USD'})` }),
     el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table' }, [thead, tbody])),
   ]);
+}
+
+// Scroll the 10-year table back to its start, where the latest fiscal year now sits.
+function resetTableScroll(root) {
+  for (const box of root.querySelectorAll('.table-scroll')) box.scrollLeft = 0;
 }
 
 // ---------- Charts ----------
@@ -326,12 +351,21 @@ function headerCard(data, { onRefresh, onSend, busy }) {
   const refreshBtn = el('button', { class: 'btn btn-ghost btn-inline', text: busy ? 'Refreshing...' : 'Refresh', attrs: { type: 'button' } });
   refreshBtn.disabled = busy;
   refreshBtn.addEventListener('click', onRefresh);
-  const sendBtn = el('button', { class: 'btn btn-primary btn-inline', text: 'Send to Calculator →', attrs: { type: 'button' } });
+  // The calculator is never sent a FCF/share that the data-quality checks marked N/A
+  const lastYear = m.years[m.years.length - 1];
+  const fcfPsNote = m.quality?.cellNotes?.fcfPerShare?.[lastYear] || null;
+  const fcfPsOk = isNum(m.derived.fcfPerShare[m.derived.fcfPerShare.length - 1]) && !fcfPsNote;
+  const sendBtn = el('button', {
+    class: 'btn btn-primary btn-inline',
+    text: fcfPsOk ? 'Send to Calculator →' : 'Send to Calculator (no FCF/share) →',
+    attrs: fcfPsOk ? { type: 'button' } : { type: 'button', title: `FCF/share will not be sent: ${fcfPsNote || 'it is not available for the latest year'}` },
+  });
   sendBtn.addEventListener('click', onSend);
 
   const notes = [];
   if (m.coverage.missing.length) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found. Not reported in XBRL: ${m.coverage.missing.join(', ')}.`);
   if (m.grossProfitDerived) notes.push('Gross profit computed as revenue minus cost of revenue (not separately reported).');
+  if (m.quality?.summary?.length) notes.push(`Data quality: ${m.quality.summary.join('; ')}.`);
 
   return el('div', { class: 'card' }, [
     el('div', { class: 'company-head' }, [
@@ -381,6 +415,8 @@ export function renderFilings(container, { onSendToCalculator }) {
     results.hidden = name !== 'metrics';
     storyPane.hidden = name !== 'story';
     newsPane.hidden = name !== 'news';
+    // A hidden pane can't hold a scroll position, so make sure the latest year is in view when it reappears
+    if (name === 'metrics') resetTableScroll(results);
     const paneArgs = { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null };
     if (name === 'story') renderStoryPane(storyPane, paneArgs);
     if (name === 'news') renderNewsPane(newsPane, paneArgs);
@@ -414,10 +450,11 @@ export function renderFilings(container, { onSendToCalculator }) {
         onSend: () => {
           const m = data.metrics;
           const lastFcfPs = m.derived.fcfPerShare[m.derived.fcfPerShare.length - 1];
+          const lastNote = m.quality?.cellNotes?.fcfPerShare?.[m.years[m.years.length - 1]];
           const payload = {
             ticker: data.ticker,
             companyName: data.companyName,
-            fcfPerShare: isNum(lastFcfPs) ? Number(lastFcfPs.toFixed(2)) : null,
+            fcfPerShare: isNum(lastFcfPs) && !lastNote ? Number(lastFcfPs.toFixed(2)) : null,
             growthRate1_5: isNum(m.fcfCagr) ? Number((m.fcfCagr * 100).toFixed(1)) : null,
           };
           try {
@@ -432,6 +469,7 @@ export function renderFilings(container, { onSendToCalculator }) {
       tableCard(data.metrics),
       chartsGrid(data.metrics),
     );
+    resetTableScroll(results);
   }
 
   async function load(q, { refresh = false, keep = null } = {}) {

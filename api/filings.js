@@ -1,6 +1,6 @@
 import sql from './_db.js';
 import { requireAuth } from './_auth.js';
-import { resolveInput, fetchCompanyFacts, buildMetrics } from './_sec.js';
+import { resolveInput, fetchCompanyFacts, buildMetrics, DATA_VERSION } from './_sec.js';
 
 const USER_ID = 'local';
 const CACHE_MS = 7 * 24 * 3600 * 1000;
@@ -62,7 +62,8 @@ export default async function handler(req, res) {
     const row = existing[0];
     if (row) {
       const age = Date.now() - new Date(row.fetched_at).getTime();
-      const fresh = age < CACHE_MS;
+      // Rows built by older extraction logic (no or old dataVersion) are refetched whatever their age
+      const fresh = age < CACHE_MS && row.metrics?.dataVersion === DATA_VERSION;
       const coolingDown = forceRefresh && age < REFRESH_COOLDOWN_MS;
       if ((fresh && !forceRefresh) || coolingDown) {
         return res.status(200).json(toResponse(row, true));
