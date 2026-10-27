@@ -1,6 +1,6 @@
 import sql from './_db.js';
 import { requireAuth } from './_auth.js';
-import { resolveInput, fetchCompanyFacts, buildMetrics, DATA_VERSION } from './_sec.js';
+import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from './_sec.js';
 
 const USER_ID = 'local';
 const CACHE_MS = 7 * 24 * 3600 * 1000;
@@ -74,6 +74,18 @@ export default async function handler(req, res) {
     const metrics = facts ? buildMetrics(facts) : null;
     if (!metrics) {
       return res.status(404).json({ error: 'No XBRL financial data available for this company' });
+    }
+
+    // Latest annual filing, for the header links. Links are optional, so a failure here never blocks the metrics.
+    try {
+      const f = await findLatestAnnualFiling(target.cik);
+      metrics.latestFiling = f && {
+        form: f.form, filingDate: f.filingDate, reportDate: f.reportDate, accession: f.accession,
+        primaryDocument: f.primaryDocument, viewerUrl: f.viewerUrl, indexUrl: f.indexUrl,
+      };
+    } catch (err) {
+      console.error('latest filing lookup failed:', err);
+      metrics.latestFiling = null;
     }
 
     const companyName = (typeof facts.entityName === 'string' && facts.entityName) || target.title || null;

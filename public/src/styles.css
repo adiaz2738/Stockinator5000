@@ -636,3 +636,20 @@ table.fin-table td.cell-note,
 table.fin-table td.cell-adjusted { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
 table.fin-table td.cell-note { text-decoration-color: var(--text-3); }
 table.fin-table td.cell-adjusted { text-decoration-color: var(--yellow); }
+
+/* ---------- Filings: as-filed statements ---------- */
+.stmt-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stmt-note { margin: 0 0 12px; }
+.link-btn-inline { font-family: var(--mono); font-size: 12px; color: var(--blue); text-decoration: none; }
+.link-btn-inline:hover { text-decoration: underline; }
+.stmt-filing-line { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+.stmt-empty-link { margin-top: 10px; }
+table.stmt-table th { white-space: normal; text-align: right; vertical-align: bottom; }
+table.stmt-table th:first-child { text-transform: none; text-align: left; min-width: 280px; max-width: 460px; }
+table.stmt-table td:first-child { white-space: normal; min-width: 280px; max-width: 460px; }
+table.stmt-table tr.stmt-total td { font-weight: 700; color: var(--text); border-top: 1px solid var(--border-hi); }
+table.stmt-table tr.stmt-section td:first-child { font-weight: 600; color: var(--text); }
+table.stmt-table tr.lvl-1 td:first-child { padding-left: 28px; }
+table.stmt-table tr.lvl-2 td:first-child { padding-left: 44px; }
+table.stmt-table tr.lvl-3 td:first-child { padding-left: 60px; }
+table.stmt-table tr.lvl-4 td:first-child { padding-left: 76px; }

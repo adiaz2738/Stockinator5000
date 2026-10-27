@@ -14,7 +14,7 @@ const CIK_RE = /^\d{1,10}$/;
 
 let nextSlot = 0;
 
-async function secFetch(url, accept = 'application/json') {
+export async function secFetch(url, accept = 'application/json') {
   const userAgent = process.env.SEC_USER_AGENT;
   if (!userAgent) throw new Error('SEC_USER_AGENT is not configured');
 
@@ -176,6 +176,27 @@ const METRICS = {
     'us-gaap': ['WeightedAverageNumberOfDilutedSharesOutstanding'],
     'ifrs-full': ['AdjustedWeightedAverageShares'],
   },
+  cash: {
+    kind: 'instant',
+    'us-gaap': ['CashAndCashEquivalentsAtCarryingValue', 'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'],
+    'ifrs-full': ['CashAndCashEquivalents'],
+  },
+  shortTermInvestments: {
+    kind: 'instant',
+    'us-gaap': ['ShortTermInvestments', 'MarketableSecuritiesCurrent', 'AvailableForSaleSecuritiesDebtSecuritiesCurrent', 'OtherShortTermInvestments'],
+    'ifrs-full': ['ShortTermInvestments', 'CurrentInvestments'],
+  },
+  totalAssets: {
+    kind: 'instant',
+    'us-gaap': ['Assets'],
+    'ifrs-full': ['Assets'],
+  },
+  // Only used to complete the net cash figure; not shown as its own row
+  currentDebt: {
+    kind: 'instant',
+    'us-gaap': ['LongTermDebtCurrent', 'DebtCurrent'],
+    'ifrs-full': ['CurrentPortionOfLongtermBorrowings', 'CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings'],
+  },
   currentAssets: {
     kind: 'instant',
     'us-gaap': ['AssetsCurrent'],
@@ -288,7 +309,7 @@ function extractForTaxonomy(facts, taxonomy) {
       let contributed = false;
       for (const [fy, v] of series.byYear) {
         if (!merged.has(fy)) {
-          merged.set(fy, v);
+          merged.set(fy, { ...v, tag });
           contributed = true;
         }
       }
@@ -309,7 +330,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 2;
+export const DATA_VERSION = 3;
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -320,7 +341,7 @@ const SHARES_OK_MAX = 2;
 const MIN_ABS_EPS_FOR_CHECK = 0.05;
 // Dollar series that stay clearly away from zero; others (net income, cash flow, equity, retained earnings...)
 // legitimately pass near zero, where a 1000x "outlier" is real, so they are never rescaled.
-const OUTLIER_CHECK_KEYS = ['revenue', 'costOfRevenue', 'sga', 'rnd', 'depreciation', 'currentAssets', 'currentLiabilities', 'totalLiabilities', 'netReceivables', 'capex', 'dilutedShares'];
+const OUTLIER_CHECK_KEYS = ['revenue', 'costOfRevenue', 'sga', 'rnd', 'depreciation', 'currentAssets', 'currentLiabilities', 'totalLiabilities', 'netReceivables', 'capex', 'dilutedShares', 'totalAssets', 'cash'];
 
 // ratio ~ 10^k for k in {3, 6, -3, -6} (within about a factor of 2.2), else null
 function scalePower(ratio) {
@@ -465,6 +486,11 @@ function buildQualitySummary(quality, years) {
   return out;
 }
 
+// Long-term debt tags that already contain the current portion, so it must not be added again
+const LTD_TAGS_INCLUDING_CURRENT = new Set(['LongTermDebt']);
+// Extracted only to support another figure, so they don't count toward "metrics found"
+const COVERAGE_EXCLUDE = new Set(['currentDebt']);
+
 // Builds the metrics document stored in Neon and returned to the client.
 export function buildMetrics(facts) {
   const candidates = ['us-gaap', 'ifrs-full']
@@ -510,9 +536,34 @@ export function buildMetrics(facts) {
   const derived = {
     grossMargin: [], netMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
     debtToEquity: [], longTermDebtYears: [], currentRatio: [], roe: [],
-    fcf: [], fcfPerShare: [], epsGrowth: [],
+    fcf: [], fcfPerShare: [], epsGrowth: [], netCash: [],
   };
   years.forEach((_, i) => {
+    // Net cash (debt) = cash and equivalents - long-term debt - current portion of debt (when reported).
+    // Derived; N/A whenever cash or long-term debt is missing, never assumed to be zero.
+    const cashV = at('cash', i);
+    const ltdV = at('longTermDebt', i);
+    const curDebtV = at('currentDebt', i);
+    const ltdTag = res.out.longTermDebt.values.get(years[i])?.tag;
+    let netCash = null;
+    if (cashV === null) {
+      noteCell('netCash', years[i], 'Cash and cash equivalents are not reported for this year, so net cash cannot be computed');
+    } else if (ltdV === null) {
+      noteCell('netCash', years[i], 'Long-term debt is not reported for this year, so net cash cannot be computed');
+    } else if (LTD_TAGS_INCLUDING_CURRENT.has(ltdTag)) {
+      netCash = cashV - ltdV;
+      noteCell('netCash', years[i], `Cash minus debt as tagged (${ltdTag} already includes the current portion)`);
+    } else if (curDebtV === null || curDebtV < 0) {
+      // A negative debt balance is not meaningful, so it is left out rather than netted against cash
+      netCash = cashV - ltdV;
+      noteCell('netCash', years[i], curDebtV === null
+        ? 'Cash minus long-term debt. The current portion of debt is not reported for this year, so it is not included'
+        : 'Cash minus long-term debt. The reported current portion of debt is negative, so it is not included');
+    } else {
+      netCash = cashV - ltdV - curDebtV;
+    }
+    derived.netCash.push(netCash);
+
     const gp = grossProfit[i];
     const ni = at('netIncome', i);
     const opInc = at('operatingIncome', i);
@@ -562,7 +613,8 @@ export function buildMetrics(facts) {
     }
   }
 
-  const found = METRIC_KEYS.filter((k) => raw[k].some((v) => v !== null));
+  const coverageKeys = METRIC_KEYS.filter((k) => !COVERAGE_EXCLUDE.has(k));
+  const found = coverageKeys.filter((k) => raw[k].some((v) => v !== null));
   const found2 = grossProfitDerived && !found.includes('grossProfit') ? [...found, 'grossProfit'] : found;
   const tags = {};
   for (const key of METRIC_KEYS) tags[key] = res.out[key].tags;
@@ -583,8 +635,8 @@ export function buildMetrics(facts) {
     tags,
     coverage: {
       found: found2.length,
-      total: METRIC_KEYS.length,
-      missing: METRIC_KEYS.filter((k) => !found2.includes(k)),
+      total: coverageKeys.length,
+      missing: coverageKeys.filter((k) => !found2.includes(k)),
     },
   };
 }
@@ -595,6 +647,9 @@ const ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
 
 export const SECTION_CAPS = { business: 30000, risk_factors: 30000, mdna: 40000, segments: 12000 };
 export const SECTION_KEYS = Object.keys(SECTION_CAPS);
+
+export const ACCESSION_RE = /^\d{10}-\d{2}-\d{6}$/;
+export const DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 // Most recent 10-K / 40-F / 20-F for a CIK, or null.
 export async function findLatestAnnualFiling(cik) {
@@ -608,8 +663,12 @@ export async function findLatestAnnualFiling(cik) {
   const i = rc.form.findIndex((f) => ANNUAL_FORMS.has(f));
   if (i < 0) return null;
   const accession = rc.accessionNumber[i];
+  const primaryDocument = rc.primaryDocument[i];
+  // Links are built only from values SEC returned, and only if they have the expected shape
+  if (!ACCESSION_RE.test(accession) || !DOC_NAME_RE.test(primaryDocument || '')) return null;
   const base = `${ARCHIVES}/${parseInt(padded, 10)}/${accession.replace(/-/g, '')}`;
   return {
+    viewerUrl: `https://www.sec.gov/ix?doc=${new URL(`${base}/${primaryDocument}`).pathname}`,
     form: rc.form[i],
     filingDate: rc.filingDate[i],
     reportDate: rc.reportDate?.[i] || null,

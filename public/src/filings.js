@@ -1,5 +1,6 @@
 import { renderStoryPane } from './story.js';
 import { renderNewsPane } from './news.js';
+import { renderStatementsPane, secLink, fmtFilingDate } from './statements.js';
 
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 
@@ -173,6 +174,10 @@ function tableCard(m) {
       ['Diluted shares', r.dilutedShares, fmtShares],
     ]],
     ['Balance Sheet', [
+      ['Cash and cash equivalents', r.cash, money],
+      ['Short-term investments', r.shortTermInvestments, money, 'Short-term investments / marketable securities, as tagged by the company'],
+      ['Net cash (debt), derived', d.netCash, money, 'Derived: cash and cash equivalents minus long-term debt, minus the current portion of debt where the company reports it (cells say when it is missing). Short-term investments are not counted. N/A when cash or long-term debt is not reported.'],
+      ['Total assets', r.totalAssets, money],
       ['Total current assets', r.currentAssets, money], ['Total current liabilities', r.currentLiabilities, money],
       ['Total liabilities', r.totalLiabilities, money], ["Shareholders' equity", r.equity, money],
       ['Long-term debt', r.longTermDebt, money], ['Retained earnings', r.retainedEarnings, money],
@@ -210,10 +215,10 @@ function tableCard(m) {
       el('td', { text: title }),
       el('td', { class: 'group-fill', attrs: { colspan: String(m.years.length) } }),
     ]));
-    for (const [label, values, fmt] of rows) {
+    for (const [label, values, fmt, tip] of rows) {
       const metricKey = keyOfSeries.get(values);
       tbody.append(el('tr', {}, [
-        el('td', { text: label }),
+        el('td', { text: label, attrs: tip ? { title: tip } : {} }),
         ...newestFirst.map((i) => {
           const v = values[i];
           // Rescaled or derived values and N/A-with-a-reason cells explain themselves on hover
@@ -348,6 +353,12 @@ function headerCard(data, { onRefresh, onSend, busy }) {
       rel: 'noopener noreferrer',
     },
   });
+  // Built from values SEC returned (CIK, accession, document name), validated on the server
+  const lf = m.latestFiling;
+  const annualLink = lf?.viewerUrl?.startsWith('https://www.sec.gov/') ? secLink(lf.viewerUrl, `Latest annual report ↗ (${lf.form}, ${fmtFilingDate(lf.filingDate)})`, 'btn btn-ghost btn-inline link-btn') : null;
+  const allFilingsLink = lf && /^[0-9A-Za-z-]{1,10}$/.test(lf.form)
+    ? secLink(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(data.cik)}&type=${encodeURIComponent(lf.form)}&dateb=&owner=include&count=40`, 'All filings ↗', 'btn btn-ghost btn-inline link-btn')
+    : null;
   const refreshBtn = el('button', { class: 'btn btn-ghost btn-inline', text: busy ? 'Refreshing...' : 'Refresh', attrs: { type: 'button' } });
   refreshBtn.disabled = busy;
   refreshBtn.addEventListener('click', onRefresh);
@@ -375,7 +386,7 @@ function headerCard(data, { onRefresh, onSend, busy }) {
           el('span', { class: 'mono ticker-chip', text: data.ticker || NA }),
         ]),
       ]),
-      el('div', { class: 'head-actions' }, [filingLink, refreshBtn, sendBtn]),
+      el('div', { class: 'head-actions' }, [filingLink, annualLink, allFilingsLink, refreshBtn, sendBtn]),
     ]),
     el('div', { class: 'meta-row' }, [
       meta('CIK', data.cik), meta('Taxonomy', data.taxonomy || NA),
@@ -402,26 +413,32 @@ export function renderFilings(container, { onSendToCalculator }) {
   const storyPane = el('div', { class: 'filings-results' });
   const newsPane = el('div', { class: 'filings-results' });
   const subMetrics = el('button', { class: 'sub-tab', text: 'Metrics', attrs: { type: 'button' } });
+  const statementsPane = el('div', { class: 'filings-results' });
+  const subStatements = el('button', { class: 'sub-tab', text: 'Statements', attrs: { type: 'button' } });
   const subStory = el('button', { class: 'sub-tab', text: 'Story', attrs: { type: 'button' } });
   const subNews = el('button', { class: 'sub-tab sub-tab-news', text: 'News', attrs: { type: 'button' } });
-  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStory, subNews]);
-  container.append(searchCard, subTabs, results, storyPane, newsPane);
+  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStatements, subStory, subNews]);
+  container.append(searchCard, subTabs, results, statementsPane, storyPane, newsPane);
 
   function showSubTab(name) {
     activeSubTab = name;
     subMetrics.classList.toggle('active', name === 'metrics');
+    subStatements.classList.toggle('active', name === 'statements');
     subStory.classList.toggle('active', name === 'story');
     subNews.classList.toggle('active', name === 'news');
     results.hidden = name !== 'metrics';
+    statementsPane.hidden = name !== 'statements';
     storyPane.hidden = name !== 'story';
     newsPane.hidden = name !== 'news';
     // A hidden pane can't hold a scroll position, so make sure the latest year is in view when it reappears
     if (name === 'metrics') resetTableScroll(results);
     const paneArgs = { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null };
+    if (name === 'statements') renderStatementsPane(statementsPane, paneArgs);
     if (name === 'story') renderStoryPane(storyPane, paneArgs);
     if (name === 'news') renderNewsPane(newsPane, paneArgs);
   }
   subMetrics.addEventListener('click', () => showSubTab('metrics'));
+  subStatements.addEventListener('click', () => showSubTab('statements'));
   subStory.addEventListener('click', () => showSubTab('story'));
   subNews.addEventListener('click', () => showSubTab('news'));
 
@@ -489,6 +506,7 @@ export function renderFilings(container, { onSendToCalculator }) {
       }
       lastLoaded = { q, data: body };
       showData(body);
+      if (activeSubTab === 'statements') renderStatementsPane(statementsPane, { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null });
       return body;
     } catch (err) {
       console.error(err);
