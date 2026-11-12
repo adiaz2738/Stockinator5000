@@ -239,9 +239,30 @@ const METRICS = {
   },
   capex: {
     kind: 'flow',
-    'us-gaap': ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets', 'PaymentsForCapitalImprovements'],
+    // Tags that total a company's capital spending. Software and intangibles are components (below), not totals.
+    'us-gaap': ['PaymentsToAcquirePropertyPlantAndEquipment', 'PaymentsToAcquireProductiveAssets', 'PaymentsForCapitalImprovements', 'PaymentsToAcquireOtherPropertyPlantAndEquipment'],
     'ifrs-full': ['PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities', 'PurchaseOfPropertyPlantAndEquipment'],
   },
+};
+
+// Capital-type investing outflows that are summed when no single capex tag exists for a year.
+// Acquisitions, purchases of investments and loans are deliberately absent.
+const CAPEX_COMPONENTS = {
+  'us-gaap': [
+    'PaymentsToAcquireMachineryAndEquipment', 'PaymentsToAcquireBuildings', 'PaymentsToAcquireFurnitureAndFixtures',
+    'PaymentsToAcquireOtherProductiveAssets', 'PaymentsToDevelopSoftware', 'PaymentsForSoftware',
+    'PaymentsToAcquireIntangibleAssets', 'PaymentsToAcquireOilAndGasPropertyAndEquipment', 'PaymentsToAcquireMiningAssets',
+  ],
+  'ifrs-full': [
+    'PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities', 'PurchaseOfOtherLongtermAssetsClassifiedAsInvestingActivities',
+    'PurchaseOfInvestmentPropertyClassifiedAsInvestingActivities',
+  ],
+};
+
+// If any of these carries a non-zero annual value in the displayed years, the company has debt in XBRL
+const DEBT_PRESENCE_TAGS = {
+  'us-gaap': ['LongTermDebt', 'LongTermDebtNoncurrent', 'LongTermDebtCurrent', 'DebtCurrent', 'ShortTermBorrowings', 'NotesPayable', 'LongTermNotesPayable', 'ConvertibleNotesPayable', 'ConvertibleDebt', 'LineOfCredit', 'LongTermLineOfCredit', 'SecuredDebt', 'UnsecuredDebt', 'DebtInstrumentCarryingAmount', 'DebtAndCapitalLeaseObligations', 'LongTermDebtAndCapitalLeaseObligations', 'NotesPayableRelatedPartiesClassifiedCurrent', 'SeniorNotes'],
+  'ifrs-full': ['Borrowings', 'LongtermBorrowings', 'CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings', 'NoncurrentPortionOfNoncurrentLoansReceived', 'NoncurrentPortionOfNoncurrentBondsIssued', 'BondsIssued'],
 };
 
 export const METRIC_KEYS = Object.keys(METRICS);
@@ -252,7 +273,7 @@ const DAY = 86400000;
 
 // Fiscal-year label: year of the period end, shifted back 20 days so 52/53-week
 // years ending in the first days of January land on the prior year.
-function fiscalYearOf(endDate) {
+export function fiscalYearOf(endDate) {
   const t = Date.parse(`${endDate}T00:00:00Z`);
   if (Number.isNaN(t)) return null;
   return new Date(t - 20 * DAY).getUTCFullYear();
@@ -319,7 +340,31 @@ function extractForTaxonomy(facts, taxonomy) {
     out[key] = { values: merged, tags: tagsUsed };
     if (merged.size) found++;
   }
-  return { out, found, currency };
+
+  // Capital-type components per fiscal year, for years where no single capex tag exists
+  const capexParts = new Map();
+  for (const tag of CAPEX_COMPONENTS[taxonomy] || []) {
+    const concept = concepts[tag];
+    const series = concept?.units ? annualSeries(concept, 'flow') : null;
+    if (!series) continue;
+    for (const [fy, v] of series.byYear) {
+      if (!capexParts.has(fy)) capexParts.set(fy, []);
+      capexParts.get(fy).push({ tag, label: concept.label || tag, value: Math.abs(v.value) });
+    }
+  }
+
+  // Years (fiscal) in which any debt tag has a non-zero annual value
+  const debtYears = new Set();
+  for (const tag of DEBT_PRESENCE_TAGS[taxonomy] || []) {
+    const concept = concepts[tag];
+    if (!concept?.units) continue;
+    for (const arr of Object.values(concept.units)) {
+      for (const f of arr) {
+        if (ANNUAL_FORMS.has(f.form) && typeof f.val === 'number' && f.val !== 0 && f.end) debtYears.add(fiscalYearOf(f.end));
+      }
+    }
+  }
+  return { out, found, currency, capexParts, debtYears };
 }
 
 const round = (n, d = 4) => (n === null || !Number.isFinite(n) ? null : Number(n.toFixed(d)));
@@ -330,7 +375,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 3;
+export const DATA_VERSION = 4;
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -492,7 +537,9 @@ const LTD_TAGS_INCLUDING_CURRENT = new Set(['LongTermDebt']);
 const COVERAGE_EXCLUDE = new Set(['currentDebt']);
 
 // Builds the metrics document stored in Neon and returned to the client.
-export function buildMetrics(facts) {
+// `extra` carries figures derived from the as-filed statements (see api/_statements.js):
+//   statementCapex: Map(fiscalYear -> { value, lines }), statementWorkingCapital: Map(fiscalYear -> { label, amount })
+export function buildMetrics(facts, extra = {}) {
   const candidates = ['us-gaap', 'ifrs-full']
     .map((tax) => ({ tax, res: extractForTaxonomy(facts, tax) }))
     .filter((c) => c.res);
@@ -523,6 +570,30 @@ export function buildMetrics(facts) {
   for (const r of quality.rescaled) noteCell(r.metric, r.year, r.reason);
   for (const n of quality.nulled) noteCell(n.metric, n.year, n.reason);
   for (const d of quality.derived) noteCell(d.metric, d.year, d.reason);
+
+  // Capex for years with no single capex tag: the as-filed statement (sees every investing line), else the
+  // sum of standard capital-type XBRL tags. Where both exist the statement wins, because custom-tagged lines
+  // (leasehold improvements, patents) never appear in companyfacts and would be silently missing from the sum.
+  const capexMethod = years.map((_, i) => (raw.capex[i] !== null ? 'tag' : null));
+  const money = (n) => Math.round(n).toLocaleString('en-US');
+  years.forEach((fy, i) => {
+    if (raw.capex[i] !== null) return;
+    const st = extra.statementCapex?.get(fy);
+    const parts = res.capexParts.get(fy);
+    const partsSum = parts?.length ? parts.reduce((s, p) => s + p.value, 0) : null;
+    if (st) {
+      raw.capex[i] = st.value;
+      capexMethod[i] = 'statement';
+      let text = `Derived from as-filed statement: ${st.lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ')}. Only capital-type investing lines are included; acquisitions, investment purchases and loans are not.`;
+      if (partsSum !== null && Math.round(partsSum) !== Math.round(st.value)) text += ` (Standard XBRL tags alone would give ${money(partsSum)}.)`;
+      noteCell('capex', fy, text);
+    } else if (partsSum !== null) {
+      raw.capex[i] = partsSum;
+      capexMethod[i] = 'components';
+      noteCell('capex', fy, `Derived from components: ${parts.map((p) => `${p.label} ${money(p.value)}`).join('; ')}. Standard XBRL tags only; custom-tagged lines would not be included.`);
+    }
+  });
+  const capexDerivedYears = (m) => years.filter((_, i) => capexMethod[i] === m);
 
   // Gross profit: use the reported figure; else revenue - cost of revenue (both reported).
   const grossProfit = years.map((_, i) => {
@@ -583,6 +654,16 @@ export function buildMetrics(facts) {
     derived.currentRatio.push(round(div(at('currentAssets', i), at('currentLiabilities', i))));
     derived.roe.push(equity !== null && equity > 0 ? round(div(ni, equity)) : null);
     derived.fcf.push(fcf);
+    // Display-only flag: OCF moved by more than 50% and one working-capital line in the as-filed statement
+    // is bigger than half of that move. No number is adjusted.
+    const prevOcf = i > 0 ? raw.operatingCashFlow[i - 1] : null;
+    const wc = extra.statementWorkingCapital?.get(years[i]);
+    if (fcf !== null && ocf !== null && prevOcf !== null && prevOcf !== 0 && wc) {
+      const change = ocf - prevOcf;
+      if (Math.abs(change) / Math.abs(prevOcf) > 0.5 && Math.abs(wc.amount) > Math.abs(change) / 2) {
+        noteCell('fcf', years[i], 'Operating cash flow includes a large working-capital swing; FCF may not be representative.');
+      }
+    }
     // FCF/share is N/A (with a reason) rather than a number that fails a sanity check
     const shares = at('dilutedShares', i);
     let fcfPerShare = null;
@@ -620,9 +701,20 @@ export function buildMetrics(facts) {
   for (const key of METRIC_KEYS) tags[key] = res.out[key].tags;
 
   quality.summary = buildQualitySummary(quality, years);
+  const byStatement = capexDerivedYears('statement');
+  const byComponents = capexDerivedYears('components');
+  if (byStatement.length) quality.summary.push(`capex for ${fmtYearRanges(byStatement)} derived from the as-filed statement`);
+  if (byComponents.length) quality.summary.push(`capex for ${fmtYearRanges(byComponents)} derived from components`);
 
   return {
     dataVersion: DATA_VERSION,
+    capexMethod,
+    // A year with no debt tag of any kind and no interest expense shows "None reported" and passes the
+    // debt-vs-earnings rule. A year with either one stays N/A.
+    debt: {
+      noDebtYears: years.map((fy, i) => raw.longTermDebt[i] === null && raw.currentDebt[i] === null
+        && !res.debtYears.has(fy) && raw.interestExpense[i] === null),
+    },
     taxonomy,
     currency: res.currency,
     quality,

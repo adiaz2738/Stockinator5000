@@ -3,9 +3,10 @@
 // own documents. Cell text is kept exactly as filed (never parsed into numbers) and is rendered with
 // textContent on the client; fetched HTML is never passed through.
 
-import { secFetch, listFilingDocuments, DOC_NAME_RE } from './_sec.js';
+import sql from './_db.js';
+import { secFetch, listFilingDocuments, fiscalYearOf, DOC_NAME_RE } from './_sec.js';
 
-export const PARSER_VERSION = 1;
+export const PARSER_VERSION = 2;
 
 const R_PAGE_RE = /^R\d{1,4}\.htm$/;
 const MAX_ROWS = 400;
@@ -92,7 +93,7 @@ function pickReports(reports) {
 
 // ---------- Row structure (indentation and totals) ----------
 
-const TOTAL_LABEL = /^(?:total\b|net (?:income|loss|earnings|cash|increase|decrease|change|\(loss\))|gross (?:profit|margin)|operating (?:income|profit|loss)|income(?: \(loss\))?(?: from continuing operations)? before|(?:increase|decrease)|cash and (?:cash equivalents|restricted).*(?:end|beginning) of|(?:net )?cash (?:provided|used|flows?|generated)|comprehensive income|profit\b|earnings before)/i;
+const TOTAL_LABEL = /^(?:total\b|net (?:income|loss|earnings|cash|increase|decrease|change|\(loss\))|gross (?:profit|margin)|operating (?:income|profit|loss)|income(?: \(loss\))?(?: from continuing operations)? before|cash and (?:cash equivalents|restricted).*(?:end|beginning) of|(?:net )?cash (?:provided|used|flows?|generated)|comprehensive income|profit\b|earnings before)/i;
 
 // Section headers have a label and no values ("Current assets:"). Rows under a header are indented until a
 // total row closes the section. Display heuristics only: the numbers are never touched.
@@ -443,4 +444,151 @@ export async function fetchAsFiledStatements(filing) {
     }
   }
   return { parserVersion: PARSER_VERSION, statements };
+}
+
+// ---------- Cached loading (shared by /api/statements and /api/filings) ----------
+
+const USER_ID = 'local';
+
+async function ensureStatementsTable() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS company_statements (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'local',
+      cik TEXT NOT NULL,
+      accession TEXT NOT NULL,
+      statements JSONB NOT NULL,
+      fetched_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, cik, accession)
+    )
+  `;
+}
+
+// A filing never changes once accepted, so a cached row is reused while the parser version matches.
+// Nothing found is not cached, so a later parser fix or a transient SEC error isn't remembered.
+export async function loadStatements(cik, filing) {
+  await ensureStatementsTable();
+  const existing = await sql`
+    SELECT statements FROM company_statements
+    WHERE user_id = ${USER_ID} AND cik = ${cik} AND accession = ${filing.accession}
+  `;
+  if (existing[0]?.statements?.parserVersion === PARSER_VERSION) {
+    return { statements: existing[0].statements.statements, cached: true };
+  }
+  const result = await fetchAsFiledStatements(filing);
+  if (Object.values(result.statements).some(Boolean)) {
+    await sql`
+      INSERT INTO company_statements (user_id, cik, accession, statements, fetched_at)
+      VALUES (${USER_ID}, ${cik}, ${filing.accession}, ${JSON.stringify(result)}::jsonb, NOW())
+      ON CONFLICT (user_id, cik, accession) DO UPDATE SET
+        statements = EXCLUDED.statements,
+        fetched_at = NOW()
+    `;
+  }
+  return { statements: result.statements, cached: false };
+}
+
+// ---------- Figures derived from the as-filed cash flow statement ----------
+
+const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+
+// Fiscal year of each value column, or null for columns that are not a 12-month period
+function columnYears(statement) {
+  return (statement.periods || []).map((p) => {
+    const months = /(\d+)\s+months?\s+ended/i.exec(p);
+    if (months && Number(months[1]) !== 12) return null;
+    const d = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+((?:19|20)\d\d)/.exec(p);
+    if (d && MONTHS[d[1].toLowerCase()] !== undefined) {
+      const iso = `${d[3]}-${String(MONTHS[d[1].toLowerCase()] + 1).padStart(2, '0')}-${d[2].padStart(2, '0')}`;
+      return fiscalYearOf(iso);
+    }
+    const y = /\b((?:19|20)\d\d)\b/.exec(p);
+    return y ? Number(y[1]) : null;
+  });
+}
+
+// Multiplier from the page's own units note; null when the page doesn't state one (then nothing is derived)
+function unitScale(units) {
+  const u = String(units || '').toLowerCase();
+  if (/billions/.test(u)) return 1e9;
+  if (/millions/.test(u)) return 1e6;
+  if (/thousands/.test(u)) return 1e3;
+  if (/\bin (?:usd|dollars)\b|^usd/.test(u) && !/(?:millions|thousands|billions)/.test(u)) return 1;
+  return null;
+}
+
+// "$ (1,234)" -> -1234, "—" -> 0, anything else non-numeric -> null
+function parseAmount(text) {
+  const t = String(text || '').trim();
+  if (/^[\u2014\u2013-]$/.test(t)) return 0;
+  const m = /^\$?\s*(\()?\s*\$?\s*(-)?\s*([\d,]+(?:\.\d+)?)\s*\)?$/.exec(t);
+  if (!m) return null;
+  const n = parseFloat(m[3].replace(/,/g, ''));
+  return m[1] || m[2] ? -n : n;
+}
+
+// Capital-type investing lines. Acquisitions of businesses, purchases of investments and loans never count.
+const CAPITAL_LINE = /\b(?:property|plant|equipment|fixed assets?|capital expenditures?|capital spending|capital improvements?|leasehold|software|technology|patents?|intangibles?|trademarks?|licen[cs]es?|buildings?|land|furniture|vehicles|machinery|improvements?|mineral (?:properties|interests)|oil and gas properties|development costs?|capitalized)\b/i;
+const NOT_CAPITAL_LINE = /acquisitions? of (?:businesses?|subsidiar|compan)|business(?:es)? acquisitions?|acquired businesses|net of cash acquired|acquire[sd]? (?:a |the )?businesses?|purchases? of (?:investments?|securities|marketable|short-term|available|held|treasury|bonds|certificates|deposits|notes)|investments? in (?:securities|affiliates|equity|marketable|unconsolidated|joint)|marketable|securit(?:y|ies)|\bloans?\b|notes? receivable|advances|proceeds|\bsales? of\b|disposals?|divest|maturit|redemption|collection|repayment|restricted cash|affiliate|joint venture|equity method|derivative|insurance|dividend/i;
+
+function investingSection(rows) {
+  const end = rows.findIndex((r) => !r.header && /investing activities/i.test(r.label));
+  if (end < 0) return [];
+  let start = -1;
+  for (let i = end - 1; i >= 0; i--) {
+    if (rows[i].header && /investing/i.test(rows[i].label)) { start = i; break; }
+  }
+  if (start < 0) {
+    for (let i = end - 1; i >= 0; i--) {
+      if (!rows[i].header && /operating activities/i.test(rows[i].label)) { start = i; break; }
+    }
+  }
+  return start < 0 ? [] : rows.slice(start + 1, end).filter((r) => !r.header);
+}
+
+// Map(fiscalYear -> { value (positive outflow, in currency units), lines: [{ label, amount }] }).
+// Never uses the "net cash used in investing" total.
+export function capexFromStatement(cf) {
+  const out = new Map();
+  const scale = unitScale(cf?.units);
+  if (!cf || scale === null) return out;
+  const years = columnYears(cf);
+  const lines = investingSection(cf.rows).filter((r) => CAPITAL_LINE.test(r.label) && !NOT_CAPITAL_LINE.test(r.label));
+  if (!lines.length) return out;
+  years.forEach((fy, col) => {
+    if (fy === null) return;
+    const used = [];
+    for (const r of lines) {
+      const v = parseAmount(r.values[col]);
+      if (v !== null && v < 0) used.push({ label: r.label, amount: -v * scale });
+    }
+    if (used.length) out.set(fy, { value: used.reduce((s, l) => s + l.amount, 0), lines: used });
+  });
+  return out;
+}
+
+const NON_CASH_LINE = /impairment|write-?downs?|provision|\bdeferred income tax|depreciation|amortization|stock-based|share-based|non-cash/i;
+const WORKING_CAPITAL_LINE = /receivable|inventor|payable|accrued|deferred revenue|deferred cogs|prepaid|other current|working capital|contract (?:assets|liabilities)|customer deposits|unearned|operating lease liabilit/i;
+
+// Map(fiscalYear -> { label, amount }): the largest single working-capital line in operating activities
+export function workingCapitalFromStatement(cf) {
+  const out = new Map();
+  const scale = unitScale(cf?.units);
+  if (!cf || scale === null) return out;
+  const end = cf.rows.findIndex((r) => !r.header && /operating activities/i.test(r.label) && /^(?:net )?cash|total/i.test(r.label));
+  const operating = end < 0 ? cf.rows : cf.rows.slice(0, end);
+  // Prefer the section the filer itself labels as changes in operating assets and liabilities
+  const sectionAt = operating.findIndex((r) => r.header && /operating assets and liabilities|working capital|changes in (?:operating )?(?:assets|current)/i.test(r.label));
+  const pool = sectionAt >= 0 ? operating.slice(sectionAt + 1) : operating;
+  const rows = pool.filter((r) => !r.header && WORKING_CAPITAL_LINE.test(r.label) && !NON_CASH_LINE.test(r.label));
+  columnYears(cf).forEach((fy, col) => {
+    if (fy === null) return;
+    let best = null;
+    for (const r of rows) {
+      const v = parseAmount(r.values[col]);
+      if (v !== null && (!best || Math.abs(v) > Math.abs(best.amount))) best = { label: r.label, amount: v * scale };
+    }
+    if (best) out.set(fy, best);
+  });
+  return out;
 }

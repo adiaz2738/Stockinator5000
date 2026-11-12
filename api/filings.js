@@ -1,5 +1,6 @@
 import sql from './_db.js';
 import { requireAuth } from './_auth.js';
+import { loadStatements, capexFromStatement, workingCapitalFromStatement } from './_statements.js';
 import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from './_sec.js';
 
 const USER_ID = 'local';
@@ -20,6 +21,20 @@ async function ensureTable() {
       UNIQUE (user_id, cik)
     )
   `;
+}
+
+const RECENT_YEARS = 3;
+
+// True when any of the latest years has no single-tag capex, or operating cash flow moved by more than 50%.
+function needsStatement(m) {
+  const n = m.years.length;
+  for (let i = Math.max(0, n - RECENT_YEARS); i < n; i++) {
+    if (m.capexMethod[i] !== 'tag') return true;
+    const ocf = m.raw.operatingCashFlow[i];
+    const prev = i > 0 ? m.raw.operatingCashFlow[i - 1] : null;
+    if (ocf !== null && prev !== null && prev !== 0 && Math.abs(ocf - prev) / Math.abs(prev) > 0.5) return true;
+  }
+  return false;
 }
 
 function toResponse(row, cached) {
@@ -71,22 +86,38 @@ export default async function handler(req, res) {
     }
 
     const facts = await fetchCompanyFacts(target.cik);
-    const metrics = facts ? buildMetrics(facts) : null;
+    let metrics = facts ? buildMetrics(facts) : null;
     if (!metrics) {
       return res.status(404).json({ error: 'No XBRL financial data available for this company' });
     }
 
-    // Latest annual filing, for the header links. Links are optional, so a failure here never blocks the metrics.
+    // Latest annual filing, for the header links and the as-filed fallbacks. A failure here never blocks the metrics.
+    let filing = null;
     try {
-      const f = await findLatestAnnualFiling(target.cik);
-      metrics.latestFiling = f && {
-        form: f.form, filingDate: f.filingDate, reportDate: f.reportDate, accession: f.accession,
-        primaryDocument: f.primaryDocument, viewerUrl: f.viewerUrl, indexUrl: f.indexUrl,
-      };
+      filing = await findLatestAnnualFiling(target.cik);
     } catch (err) {
       console.error('latest filing lookup failed:', err);
-      metrics.latestFiling = null;
     }
+
+    // Capex missing or not from a single tag, or a big operating-cash-flow swing: read the as-filed cash flow
+    // statement (cached per filing) and rebuild with what it shows.
+    if (filing && needsStatement(metrics)) {
+      try {
+        const { statements } = await loadStatements(target.cik, filing);
+        if (statements.cashflow) {
+          metrics = buildMetrics(facts, {
+            statementCapex: capexFromStatement(statements.cashflow),
+            statementWorkingCapital: workingCapitalFromStatement(statements.cashflow),
+          });
+        }
+      } catch (err) {
+        console.error('as-filed statement fallback failed:', err);
+      }
+    }
+    metrics.latestFiling = filing && {
+      form: filing.form, filingDate: filing.filingDate, reportDate: filing.reportDate, accession: filing.accession,
+      primaryDocument: filing.primaryDocument, viewerUrl: filing.viewerUrl, indexUrl: filing.indexUrl,
+    };
 
     const companyName = (typeof facts.entityName === 'string' && facts.entityName) || target.title || null;
     const saved = await sql`

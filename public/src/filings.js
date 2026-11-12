@@ -6,6 +6,7 @@ export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const NA = 'N/A';
+const NONE_REPORTED = 'None reported';
 
 // Last loaded company, so switching tabs doesn't throw the page away.
 let lastLoaded = null;
@@ -78,6 +79,8 @@ function buildRules(m) {
 
   const ltDebtYears = r.longTermDebt.map((debt, i) => {
     const earnings = r.netIncome[i];
+    // No debt tag anywhere and no interest expense that year: shown as "None reported" and passes
+    if (m.debt?.noDebtYears?.[i]) return { value: null, pass: true, note: NONE_REPORTED };
     if (!isNum(debt) || !isNum(earnings)) return { value: null, pass: null };
     if (debt <= 0) return { value: 0, pass: true };
     if (earnings <= 0) return { value: null, pass: false, note: 'Loss' };
@@ -224,7 +227,9 @@ function tableCard(m) {
           // Rescaled or derived values and N/A-with-a-reason cells explain themselves on hover
           const note = metricKey ? m.quality?.cellNotes?.[metricKey]?.[m.years[i]] : null;
           const cls = [isNum(v) ? '' : 'na', note ? (isNum(v) ? 'cell-adjusted' : 'cell-note') : ''].filter(Boolean).join(' ');
-          return el('td', { class: cls, text: isNum(v) ? fmt(v) : NA, attrs: note ? { title: note } : {} });
+          // A year with no debt tag of any kind and no interest expense shows "None reported" rather than N/A
+          const none = !isNum(v) && (metricKey === 'longTermDebt' || metricKey === 'longTermDebtYears') && m.debt?.noDebtYears?.[i];
+          return el('td', { class: cls, text: isNum(v) ? fmt(v) : none ? NONE_REPORTED : NA, attrs: note ? { title: note } : none ? { title: 'No debt is reported in the filings for this year, and there is no interest expense' } : {} });
         }),
       ]));
     }
@@ -344,15 +349,6 @@ function headerCard(data, { onRefresh, onSend, busy }) {
     el('div', { class: 'meta-value mono', text: value }),
   ]);
 
-  const filingLink = el('a', {
-    class: 'btn btn-ghost btn-inline link-btn',
-    text: 'EDGAR filings ↗',
-    attrs: {
-      href: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(data.cik)}&type=10-K&dateb=&owner=include&count=40`,
-      target: '_blank',
-      rel: 'noopener noreferrer',
-    },
-  });
   // Built from values SEC returned (CIK, accession, document name), validated on the server
   const lf = m.latestFiling;
   const annualLink = lf?.viewerUrl?.startsWith('https://www.sec.gov/') ? secLink(lf.viewerUrl, `Latest annual report ↗ (${lf.form}, ${fmtFilingDate(lf.filingDate)})`, 'btn btn-ghost btn-inline link-btn') : null;
@@ -386,7 +382,7 @@ function headerCard(data, { onRefresh, onSend, busy }) {
           el('span', { class: 'mono ticker-chip', text: data.ticker || NA }),
         ]),
       ]),
-      el('div', { class: 'head-actions' }, [filingLink, annualLink, allFilingsLink, refreshBtn, sendBtn]),
+      el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn]),
     ]),
     el('div', { class: 'meta-row' }, [
       meta('CIK', data.cik), meta('Taxonomy', data.taxonomy || NA),
