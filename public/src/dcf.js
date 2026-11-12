@@ -31,7 +31,9 @@ export function calculateDCF(inputs) {
   const terminalValue = (year10FCF * (1 + tg)) / (r - tg);
   const discountedTerminalValue = terminalValue / Math.pow(1 + r, 10);
 
-  const intrinsicValue = totalPV + discountedTerminalValue;
+  // Optional net cash per share, added undiscounted. Blank / missing means 0 and changes nothing.
+  const netCash = Number.isFinite(inputs.netCashPerShare) ? inputs.netCashPerShare : null;
+  const intrinsicValue = totalPV + discountedTerminalValue + (netCash ?? 0);
   const safetyPrice = intrinsicValue * (1 - mos);
 
   let verdict = 'FAIRLY VALUED';
@@ -47,6 +49,7 @@ export function calculateDCF(inputs) {
     totalPV,
     terminalValue,
     discountedTerminalValue,
+    netCashPerShare: netCash,
     intrinsicValue,
     safetyPrice,
     verdict,

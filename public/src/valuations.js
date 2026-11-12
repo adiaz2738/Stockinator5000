@@ -31,7 +31,7 @@ function rebuildBreakdown(row) {
   return { rows, terminalValue, discountedTerminalValue };
 }
 
-export async function renderValuations(container, onLoad) {
+async function renderForwardValuations(container, onLoad) {
   container.innerHTML = `
     <div class="summary-row" id="summary-row"></div>
     <div class="card">
@@ -167,6 +167,7 @@ export async function renderValuations(container, onLoad) {
           terminalGrowth: row.terminal_growth,
           marginOfSafety: row.margin_of_safety,
           marketPrice: row.market_price,
+          netCashPerShare: row.net_cash_per_share,
         });
       });
 
@@ -200,6 +201,7 @@ export async function renderValuations(container, onLoad) {
 
   function showDetail(row) {
     const { rows, terminalValue, discountedTerminalValue } = rebuildBreakdown(row);
+    const hasNetCash = row.net_cash_per_share !== null && row.net_cash_per_share !== undefined;
     detailWrap.innerHTML = `
       <div class="card detail-panel">
         <div class="section-label">${row.ticker} — Breakdown</div>
@@ -223,6 +225,11 @@ export async function renderValuations(container, onLoad) {
                 <td>—</td>
                 <td>${fmtMoney(discountedTerminalValue)}</td>
               </tr>
+              ${hasNetCash ? `
+              <tr class="tv-row">
+                <td colspan="3">Net Cash / Share (added undiscounted)</td>
+                <td>${fmtMoney(row.net_cash_per_share)}</td>
+              </tr>` : ''}
               <tr class="total-row">
                 <td colspan="3">Intrinsic Value</td>
                 <td>${fmtMoney(row.intrinsic_value)}</td>
@@ -250,6 +257,7 @@ export async function renderValuations(container, onLoad) {
     undoBtn.addEventListener('click', () => {
       clearTimeout(undoTimer);
       toast.remove();
+      if (pendingDelete) data = [...data, pendingDelete.row].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       pendingDelete = null;
       renderSummary();
       renderTable();
@@ -275,4 +283,183 @@ export async function renderValuations(container, onLoad) {
   }
 
   await load();
+}
+
+// ---------- Reverse DCF saved list ----------
+
+const fmtPctRaw = (v) => (Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : 'N/A');
+
+async function renderReverseSaved(container, onLoadReverse) {
+  container.replaceChildren();
+  const tableWrap = document.createElement('div');
+  const card = document.createElement('div');
+  card.className = 'card';
+  const label = document.createElement('div');
+  label.className = 'section-label';
+  label.textContent = 'Saved Reverse DCFs';
+  card.append(label, tableWrap);
+  container.append(card);
+
+  let data = [];
+  let undoTimer = null;
+  let pendingDelete = null;
+
+  const note = (text) => {
+    const d = document.createElement('div');
+    d.className = 'empty-state';
+    d.textContent = text;
+    tableWrap.replaceChildren(d);
+  };
+
+  async function load() {
+    note('Loading...');
+    try {
+      const res = await fetch('/api/reverse');
+      if (!res.ok) throw new Error('fetch failed');
+      data = await res.json();
+    } catch (err) {
+      console.error(err);
+      note('Failed to load reverse DCFs.');
+      return;
+    }
+    renderTable();
+  }
+
+  function cell(text, cls) {
+    const td = document.createElement('td');
+    if (cls) td.className = cls;
+    td.textContent = text;
+    return td;
+  }
+
+  function renderTable() {
+    if (data.length === 0) {
+      note('No saved reverse DCFs yet. Run one on the Reverse DCF page and save it.');
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'val-table';
+    const head = document.createElement('tr');
+    for (const [t, num] of [['Ticker'], ['Company'], ['Price', true], ['Price Date'], ['Implied Growth', true], ['Required Op. Margin', true], ['Saved'], ['Notes'], ['Actions']]) {
+      const th = document.createElement('th');
+      th.textContent = t;
+      if (num) th.className = 'num';
+      head.append(th);
+    }
+    const thead = document.createElement('thead');
+    thead.append(head);
+    const tbody = document.createElement('tbody');
+    for (const row of data) {
+      const tr = document.createElement('tr');
+      const res = row.results || {};
+      const notes = row.notes || '';
+      const actions = document.createElement('div');
+      actions.className = 'row-actions';
+      const loadBtn = document.createElement('button');
+      loadBtn.className = 'icon-btn';
+      loadBtn.textContent = 'Load';
+      loadBtn.addEventListener('click', () => onLoadReverse({ inputs: row.inputs || {}, ticker: row.ticker, companyName: row.company_name, price: row.price, priceDate: row.price_date, notes: row.notes }));
+      const delBtn = document.createElement('button');
+      delBtn.className = 'icon-btn danger';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', () => handleDelete(row.id));
+      actions.append(loadBtn, delBtn);
+      const tdActions = document.createElement('td');
+      tdActions.append(actions);
+      tr.append(
+        cell(row.ticker, 'mono'),
+        cell(row.company_name || '—'),
+        cell(fmtMoney(row.price), 'num'),
+        cell(row.price_date || '—', 'mono'),
+        cell(fmtPctRaw(res.impliedGrowth), 'num'),
+        cell(fmtPctRaw(res.requiredMargin), 'num'),
+        cell(row.created_at ? new Date(row.created_at).toLocaleDateString() : '—'),
+        cell(notes.length > 40 ? `${notes.slice(0, 40)}…` : (notes || '—')),
+        tdActions,
+      );
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    const scroll = document.createElement('div');
+    scroll.className = 'table-scroll';
+    scroll.append(table);
+    tableWrap.replaceChildren(scroll);
+  }
+
+  function handleDelete(id) {
+    // An earlier delete still waiting out its undo window is committed now, so it can't be lost
+    if (pendingDelete) {
+      clearTimeout(undoTimer);
+      commitDelete(pendingDelete.id);
+      document.querySelectorAll('.undo-toast').forEach((t) => t.remove());
+    }
+    pendingDelete = { id, row: data.find((d) => d.id === id) };
+    data = data.filter((d) => d.id !== id);
+
+    const toast = document.createElement('div');
+    toast.className = 'undo-toast';
+    const msg = document.createElement('span');
+    msg.textContent = 'Reverse DCF deleted.';
+    const undoBtn = document.createElement('button');
+    undoBtn.textContent = 'Undo';
+    undoBtn.addEventListener('click', () => {
+      clearTimeout(undoTimer);
+      toast.remove();
+      if (pendingDelete) data = [...data, pendingDelete.row].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      pendingDelete = null;
+      renderTable();
+    });
+    toast.append(msg, undoBtn);
+    document.body.append(toast);
+
+    undoTimer = setTimeout(() => {
+      toast.remove();
+      if (pendingDelete) commitDelete(pendingDelete.id);
+      pendingDelete = null;
+    }, 5000);
+    renderTable();
+  }
+
+  async function commitDelete(id) {
+    try {
+      const res = await fetch(`/api/reverse?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('delete failed');
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  await load();
+}
+
+// ---------- Page: Forward | Reverse toggle ----------
+
+let savedMode = 'forward';
+
+export function renderValuations(container, onLoad, onLoadReverse) {
+  container.replaceChildren();
+  const toggle = document.createElement('div');
+  toggle.className = 'sub-tabs saved-toggle';
+  const body = document.createElement('div');
+  const mk = (mode, text) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sub-tab';
+    b.textContent = text;
+    b.addEventListener('click', () => show(mode));
+    return b;
+  };
+  const fwd = mk('forward', 'Forward');
+  const rev = mk('reverse', 'Reverse');
+  toggle.append(fwd, rev);
+  container.append(toggle, body);
+
+  function show(mode) {
+    savedMode = mode;
+    fwd.classList.toggle('active', mode === 'forward');
+    rev.classList.toggle('active', mode === 'reverse');
+    if (mode === 'forward') renderForwardValuations(body, onLoad);
+    else renderReverseSaved(body, onLoadReverse);
+  }
+  show(savedMode);
 }

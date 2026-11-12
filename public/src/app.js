@@ -1,5 +1,6 @@
 import { renderCalculator } from './calculator.js';
 import { renderValuations } from './valuations.js';
+import { renderReverse } from './reverse.js';
 import { renderFilings, FILINGS_PREFILL_KEY } from './filings.js';
 import { renderLogin } from './login.js';
 
@@ -7,11 +8,13 @@ const app = document.getElementById('app');
 const loginScreen = document.getElementById('login-screen');
 const signOutBtn = document.getElementById('signout');
 const tabCalc = document.getElementById('tab-calculator');
+const tabReverse = document.getElementById('tab-reverse');
 const tabFilings = document.getElementById('tab-filings');
 const tabVal = document.getElementById('tab-valuations');
 
 function setActiveTab(route) {
   tabCalc.classList.toggle('active', route === '/' || route === '/calculator');
+  tabReverse.classList.toggle('active', route === '/reverse');
   tabFilings.classList.toggle('active', route === '/filings');
   tabVal.classList.toggle('active', route === '/valuations');
 }
@@ -20,6 +23,7 @@ function normalizeRoute() {
   const path = window.location.pathname;
   if (path === '/valuations') return '/valuations';
   if (path === '/filings') return '/filings';
+  if (path === '/reverse') return '/reverse';
   return '/calculator';
 }
 
@@ -49,9 +53,14 @@ function render(prefill) {
     renderValuations(app, (data) => {
       navigate('/calculator');
       requestAnimationFrame(() => renderCalculator(app, data));
+    }, (loaded) => {
+      navigate('/reverse');
+      requestAnimationFrame(() => renderReverse(app, { loaded }));
     });
+  } else if (route === '/reverse') {
+    renderReverse(app);
   } else if (route === '/filings') {
-    renderFilings(app, { onSendToCalculator: () => navigate('/calculator') });
+    renderFilings(app, { onSendToCalculator: () => navigate('/calculator'), onSendToReverse: () => navigate('/reverse') });
   } else {
     const fromFilings = prefill ? null : takeFilingsPrefill();
     if (fromFilings) {
@@ -111,6 +120,7 @@ signOutBtn.addEventListener('click', async () => {
 });
 
 tabCalc.addEventListener('click', () => navigate('/calculator'));
+tabReverse.addEventListener('click', () => navigate('/reverse'));
 tabFilings.addEventListener('click', () => navigate('/filings'));
 tabVal.addEventListener('click', () => navigate('/valuations'));
 

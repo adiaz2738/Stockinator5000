@@ -24,6 +24,7 @@ async function ensureTable() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE valuations ADD COLUMN IF NOT EXISTS net_cash_per_share NUMERIC`;
 }
 
 export default async function handler(req, res) {
@@ -58,6 +59,9 @@ export default async function handler(req, res) {
       const marketPrice = body.marketPrice !== undefined && body.marketPrice !== null && body.marketPrice !== ''
         ? Number(body.marketPrice)
         : null;
+      const netCashPerShare = body.netCashPerShare !== undefined && body.netCashPerShare !== null && body.netCashPerShare !== ''
+        ? Number(body.netCashPerShare)
+        : null;
       const verdict = typeof body.verdict === 'string' ? body.verdict.slice(0, 30) : null;
 
       const numericFields = [
@@ -68,7 +72,7 @@ export default async function handler(req, res) {
       if (!ticker || numericFields.some((n) => !Number.isFinite(n))) {
         return res.status(400).json({ error: 'Invalid input' });
       }
-      if (marketPrice !== null && !Number.isFinite(marketPrice)) {
+      if ((marketPrice !== null && !Number.isFinite(marketPrice)) || (netCashPerShare !== null && !Number.isFinite(netCashPerShare))) {
         return res.status(400).json({ error: 'Invalid input' });
       }
 
@@ -77,12 +81,12 @@ export default async function handler(req, res) {
           user_id, ticker, company_name, fcf_per_share,
           growth_rate_1_5, growth_rate_6_10, discount_rate,
           terminal_growth, margin_of_safety, intrinsic_value,
-          safety_price, market_price, verdict, notes
+          safety_price, market_price, verdict, notes, net_cash_per_share
         ) VALUES (
           ${USER_ID}, ${ticker}, ${companyName}, ${fcfPerShare},
           ${growthRate1_5}, ${growthRate6_10}, ${discountRate},
           ${terminalGrowth}, ${marginOfSafety}, ${intrinsicValue},
-          ${safetyPrice}, ${marketPrice}, ${verdict}, ${notes}
+          ${safetyPrice}, ${marketPrice}, ${verdict}, ${notes}, ${netCashPerShare}
         )
         RETURNING *
       `;

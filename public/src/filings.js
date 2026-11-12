@@ -3,6 +3,7 @@ import { renderNewsPane } from './news.js';
 import { renderStatementsPane, secLink, fmtFilingDate } from './statements.js';
 
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
+const REVERSE_PREFILL_KEY = 'reversePrefill';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const NA = 'N/A';
@@ -367,7 +368,7 @@ function chartsGrid(m) {
 
 // ---------- Header card ----------
 
-function headerCard(data, { onRefresh, onSend, busy }) {
+function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
   const m = data.metrics;
   const updated = new Date(data.fetchedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const meta = (label, value) => el('div', { class: 'meta-item' }, [
@@ -394,6 +395,8 @@ function headerCard(data, { onRefresh, onSend, busy }) {
     attrs: fcfPsOk ? { type: 'button' } : { type: 'button', title: `FCF/share will not be sent: ${fcfPsNote || 'it is not available for the latest year'}` },
   });
   sendBtn.addEventListener('click', onSend);
+  const reverseBtn = el('button', { class: 'btn btn-ghost btn-inline', text: 'Send to Reverse DCF →', attrs: { type: 'button' } });
+  reverseBtn.addEventListener('click', onSendReverse);
 
   const notes = [];
   if (m.coverage.missing.length) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found. Not reported in XBRL: ${m.coverage.missing.join(', ')}.`);
@@ -408,7 +411,7 @@ function headerCard(data, { onRefresh, onSend, busy }) {
           el('span', { class: 'mono ticker-chip', text: data.ticker || NA }),
         ]),
       ]),
-      el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn]),
+      el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn, reverseBtn]),
     ]),
     el('div', { class: 'meta-row' }, [
       meta('CIK', data.cik), meta('Taxonomy', data.taxonomy || NA),
@@ -420,7 +423,7 @@ function headerCard(data, { onRefresh, onSend, busy }) {
 
 // ---------- Page ----------
 
-export function renderFilings(container, { onSendToCalculator }) {
+export function renderFilings(container, { onSendToCalculator, onSendToReverse }) {
   container.replaceChildren();
 
   const input = el('input', { attrs: { id: 'filings-q', type: 'text', autocomplete: 'off', placeholder: 'Ticker (e.g. V) or EDGAR URL', maxlength: '500', 'aria-label': 'Ticker or EDGAR URL' } });
@@ -486,6 +489,37 @@ export function renderFilings(container, { onSendToCalculator }) {
           data.ticker || `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${data.cik}`,
           { refresh: true, keep: data },
         ),
+        onSendReverse: () => {
+          const m = data.metrics;
+          const n = m.years.length - 1;
+          const last = (series) => (isNum(series?.[n]) ? series[n] : null);
+          const lastFcfPs = last(m.derived.fcfPerShare);
+          const fcfNote = m.quality?.cellNotes?.fcfPerShare?.[m.years[n]];
+          // Margins for the last 5 fiscal years, oldest first. A year with no margin stays N/A (null)
+          const marginHistory = m.years.map((year, i) => ({ year, margin: isNum(m.derived.operatingMargin?.[i]) ? m.derived.operatingMargin[i] : null })).slice(-5);
+          const form = m.latestFiling?.form;
+          const payload = {
+            ticker: data.ticker,
+            companyName: data.companyName,
+            revenue: last(m.raw.revenue),
+            operatingIncome: last(m.raw.operatingIncome),
+            depreciation: last(m.raw.depreciation),
+            capex: last(m.raw.capex),
+            fcfPerShare: lastFcfPs !== null && !fcfNote ? lastFcfPs : null,
+            dilutedShares: last(m.raw.dilutedShares),
+            cash: last(m.raw.cash),
+            longTermDebt: last(m.raw.longTermDebt),
+            marginHistory,
+            fcfCagr: isNum(m.fcfCagr) ? m.fcfCagr : null,
+            source: `FY${m.years[n]} ${form && /^[0-9A-Za-z-]{1,10}$/.test(form) ? form : 'annual filing'}`,
+          };
+          try {
+            sessionStorage.setItem(REVERSE_PREFILL_KEY, JSON.stringify(payload));
+          } catch (err) {
+            console.error(err);
+          }
+          onSendToReverse();
+        },
         onSend: () => {
           const m = data.metrics;
           const lastFcfPs = m.derived.fcfPerShare[m.derived.fcfPerShare.length - 1];

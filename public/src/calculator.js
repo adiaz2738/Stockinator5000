@@ -10,6 +10,7 @@ const FIELDS = [
   { key: 'terminalGrowth', label: 'Terminal Growth Rate (%)', type: 'number' },
   { key: 'marginOfSafety', label: 'Margin of Safety (%)', type: 'number' },
   { key: 'marketPrice', label: 'Current Market Price ($, optional)', type: 'number' },
+  { key: 'netCashPerShare', label: 'Net Cash / Share ($, optional, added undiscounted)', type: 'number' },
 ];
 
 const fmtMoney = (n) => `$${n.toFixed(2)}`;
@@ -93,15 +94,18 @@ export function renderCalculator(container, prefill, options = {}) {
     const marginOfSafety = parseFloat(form.querySelector('#f-marginOfSafety').value);
     const marketPriceRaw = form.querySelector('#f-marketPrice').value.trim();
     const marketPrice = marketPriceRaw === '' ? NaN : parseFloat(marketPriceRaw);
+    // Blank (or not a number) means no net cash, and the result is identical to before this field existed
+    const netCashRaw = form.querySelector('#f-netCashPerShare').value.trim();
+    const netCashPerShare = netCashRaw === '' ? NaN : parseFloat(netCashRaw);
 
     return {
       ticker, companyName, fcfPerShare, growthRate1_5, growthRate6_10,
-      discountRate, terminalGrowth, marginOfSafety, marketPrice,
+      discountRate, terminalGrowth, marginOfSafety, marketPrice, netCashPerShare,
     };
   }
 
   function renderResults(inputs, result) {
-    const { rows, totalPV, terminalValue, discountedTerminalValue, intrinsicValue, safetyPrice, verdict } = result;
+    const { rows, totalPV, terminalValue, discountedTerminalValue, intrinsicValue, safetyPrice, verdict, netCashPerShare } = result;
     const marketPrice = inputs.marketPrice;
 
     const badgeClass = verdict === 'UNDERVALUED' ? 'badge-undervalued'
@@ -159,8 +163,13 @@ export function renderCalculator(container, prefill, options = {}) {
                 <td>—</td>
                 <td>${fmtMoney(discountedTerminalValue)}</td>
               </tr>
+              ${netCashPerShare !== null ? `
+              <tr class="tv-row">
+                <td colspan="3">Net Cash / Share (added undiscounted)</td>
+                <td>${fmtMoney(netCashPerShare)}</td>
+              </tr>` : ''}
               <tr class="total-row">
-                <td colspan="3">Intrinsic Value (Total PV + Discounted TV)</td>
+                <td colspan="3">Intrinsic Value (Total PV + Discounted TV${netCashPerShare !== null ? ' + Net Cash' : ''})</td>
                 <td>${fmtMoney(intrinsicValue)}</td>
               </tr>
             </tbody>
@@ -222,6 +231,7 @@ export function renderCalculator(container, prefill, options = {}) {
         intrinsicValue: lastResult.intrinsicValue,
         safetyPrice: lastResult.safetyPrice,
         marketPrice: Number.isFinite(lastInputs.marketPrice) ? lastInputs.marketPrice : null,
+        netCashPerShare: Number.isFinite(lastInputs.netCashPerShare) ? lastInputs.netCashPerShare : null,
         verdict: lastResult.verdict,
       };
       const res = await fetch('/api/valuations', {

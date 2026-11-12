@@ -36,6 +36,7 @@ This is a research tool — no payments flow through it. It is initially single-
 | Area | State |
 |---|---|
 | **Phase 1 — DCF Calculator** | **Done.** Calculator, step-by-step breakdown, saved valuations (Neon), FMP ticker auto-fill for company name, logo/branding |
+| **Reverse DCF page** | **Done.** "What is the price assuming?" Separate from the forward calculator: implied growth (Panel A) and required operating margin (Panel B). Saved to the `reverse_dcf` table |
 | **Filings tab** (was Phase 2/3) | **Done.** SEC EDGAR XBRL data, 10-year metrics table, screener scorecard, trend charts, Send to Calculator, Neon cache |
 | **Story sub-tab** | **Done.** AI narrative from the latest annual filing |
 | **News sub-tab** | **Done.** "Why is the stock moving": web-search news context plus recent 8-K/6-K filings, labeled amber "NEWS CONTEXT, NOT FROM FILINGS" |
@@ -50,6 +51,17 @@ This is a research tool — no payments flow through it. It is initially single-
 - Save every valuation to Neon with inputs, outputs, notes, and timestamp
 - Saved Valuations page: sortable table, reload into calculator, delete with 5s undo
 - Ticker blur auto-fills the company name via FMP (free tier, `/api/ticker`)
+- **Optional Net Cash / Share input:** when filled, it is added to intrinsic value undiscounted and shown as its own row in the breakdown table. The margin-of-safety price is applied to the total including net cash. Blank by default, so results and old saved valuations are unchanged. Saved in `valuations.net_cash_per_share`
+
+### Reverse DCF page (done)
+
+A nav tab right after Calculator. Where the calculator asks "what is it worth?", this asks "what is the current price assuming?". Wording is descriptive only, with no buy/sell language.
+
+- **Shared inputs (all editable):** ticker, company name, current price with a required price date, diluted shares, cash, total debt, other debt-like obligations (e.g. deferred purchase consideration), discount rate (10%), terminal growth (3%), margin of safety (20%), tax rate (21%). A units selector (dollars / thousands / millions) labels the dollar amounts and share counts; per-share values are always dollars. Net cash per share = (cash − debt − other) ÷ shares; enterprise value = price × shares + debt + other − cash
+- **Panel A, implied growth:** solves by bisection (range −20% to +60%) for the constant annual growth over years 1 to 10 that makes the DCF value equal the price. It calls the same `calculateDCF` engine as the forward calculator (net cash included, undiscounted). Shows the implied growth at the current price and at price ÷ (1 − margin of safety), a table of value per share at 0/3/5/8/10% growth, and implied growth at 8/10/12% discount rates. An optional second "normalized" FCF/share is shown side by side. When Filings data was sent over, the company's 10-year FCF CAGR is shown next to the implied figure. Zero/negative FCF or no solution in range is stated plainly, never a made-up number
+- **Panel B, required operating margin:** written step by step with the formula and substituted numbers: market cap, EV, multiple = (1 + g) ÷ (r − g) (own growth input, defaults to terminal growth), required FCF = EV ÷ multiple, required operating income = required FCF ÷ (1 − tax), required margin = that ÷ revenue, and the same with margin of safety (÷ (1 − MoS)). Compares with the actual margin (and the last 5 fiscal years from Filings) in words. Shows a warning when capex ÷ depreciation is outside 0.5 to 2.0 (the method assumes capex ≈ depreciation), and "Enterprise value is not positive; this method isn't meaningful here." when EV ≤ 0. Missing revenue or operating income shows N/A
+- **Send to Reverse DCF →** (Filings header): hands over ticker, company name, revenue, operating income, depreciation, capex, FCF/share, latest diluted shares, cash, long-term debt, the last 5 years of operating margins and the FCF CAGR through `sessionStorage`. N/A fields stay blank, price is never prefilled, each prefilled field is labeled with its source (e.g. "FY2025 10-K"), and a note says annual figures can be out of date and cash, debt, shares and trailing figures should be overwritten from the latest 10-Q. Debt is long-term debt only
+- **Saving:** `reverse_dcf` table (below), created on first use, via `api/reverse.js` (GET, POST, DELETE). Saved Valuations has a **Forward | Reverse** toggle; each reverse row has Load and Delete (5-second undo)
 
 ### Filings tab (done)
 
@@ -207,6 +219,23 @@ CREATE TABLE valuations (
   created_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Net cash is added later by ALTER TABLE valuations ADD COLUMN IF NOT EXISTS net_cash_per_share NUMERIC;
+-- (nullable: blank means none, and old rows are unchanged)
+
+-- Saved Reverse DCFs (Reverse DCF page). Created on first use.
+CREATE TABLE reverse_dcf (
+  id           SERIAL PRIMARY KEY,
+  user_id      TEXT NOT NULL DEFAULT 'local',  -- server-derived, never client-supplied
+  ticker       TEXT NOT NULL,
+  company_name TEXT,
+  price        NUMERIC,
+  price_date   DATE,
+  inputs       JSONB NOT NULL,                  -- units, every input box, sources, margin history
+  results      JSONB NOT NULL,                  -- implied growth, required margins, EV, net cash/share
+  notes        TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Cached SEC EDGAR metrics (Filings tab). Reused for 7 days.
 CREATE TABLE company_financials (
   id           SERIAL PRIMARY KEY,
@@ -303,6 +332,8 @@ Done:
 4. Filings tab: SEC EDGAR metrics, scorecard, charts, Send to Calculator
 5. Story sub-tab: filing text extraction, then per-section AI generation
 6. News sub-tab: recent SEC 8-K/6-K filings, price history where available, and web-search news context
+
+Also done since: operating margin on the Filings tab (ratio row, chart, informational scorecard line) and the Reverse DCF page with net cash in the forward calculator.
 
 Next (see Next Up above):
 
