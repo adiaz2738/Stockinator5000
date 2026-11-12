@@ -105,6 +105,7 @@ function buildRules(m) {
     { label: 'Consistent EPS growth', fmt: fmtPct, series: epsGrowth, consistency: true },
   ];
   const optional = [
+    { label: 'Operating margin (informational)', fmt: fmtPct, info: true, series: d.operatingMargin.map((value) => ({ value: isNum(value) ? value : null, pass: null })) },
     { label: 'ROE ≥ 25%', fmt: fmtPct, series: yearly(d.roe, (v) => v >= 0.25) },
     { label: 'Current ratio > 1', fmt: fmtRatio, series: yearly(d.currentRatio, (v) => v > 1) },
     { label: 'Retained earnings rising', fmt: (v) => fmtCompact(v, m.currency), series: reRising, consistency: true },
@@ -131,7 +132,30 @@ function pill(pass) {
   return el('span', { class: `pill ${pass ? 'pill-pass' : 'pill-fail'}`, text: pass ? 'PASS' : 'FAIL' });
 }
 
+// Informational rule: no threshold, so no pass/fail. Shows the latest value and the first-to-latest trend.
+function infoRow(rule) {
+  const pts = rule.series.map((s, i) => ({ v: s.value, i })).filter((p) => isNum(p.v));
+  const latest = rule.series[rule.series.length - 1];
+  const latestText = latest && isNum(latest.value) ? rule.fmt(latest.value) : NA;
+  let trend = NA;
+  if (pts.length >= 2) {
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    const dir = last.v > first.v ? '↑' : last.v < first.v ? '↓' : '→';
+    trend = `${rule.fmt(first.v)} ${dir} ${rule.fmt(last.v)} (${pts.length} yrs)`;
+  } else if (pts.length === 1) {
+    trend = '1 yr of data';
+  }
+  return el('div', { class: 'rule-row' }, [
+    el('div', { class: 'rule-label', text: rule.label, attrs: { title: 'No pass/fail threshold: shown for context only' } }),
+    el('div', { class: `rule-value mono${latestText === NA ? ' na' : ''}`, text: latestText }),
+    el('span', { class: 'pill pill-na', text: 'INFO' }),
+    el('div', { class: 'rule-years mono', text: trend }),
+  ]);
+}
+
 function ruleRow(rule) {
+  if (rule.info) return infoRow(rule);
   const ev = evaluate(rule);
   const latestText = ev.latest?.note ?? (ev.latest && isNum(ev.latest.value) ? rule.fmt(ev.latest.value) : NA);
   return el('div', { class: 'rule-row' }, [
@@ -192,6 +216,7 @@ function tableCard(m) {
     ]],
     ['Ratios', [
       ['Gross margin', d.grossMargin, fmtPct], ['Net margin', d.netMargin, fmtPct],
+      ['Operating margin', d.operatingMargin, fmtPct, 'Operating income ÷ revenue. N/A when either is not reported; filers that report no operating income (e.g. many IFRS filers such as Barrick) stay N/A.'],
       ['SG&A % of gross profit', d.sgaPctGrossProfit, fmtPct], ['Interest % of operating income', d.interestPctOperatingIncome, fmtPct],
       ['Debt-to-equity', d.debtToEquity, fmtRatio], ['Long-term debt / earnings', d.longTermDebtYears, fmtYears],
       ['Current ratio', d.currentRatio, fmtRatio], ['ROE', d.roe, fmtPct], ['EPS growth', d.epsGrowth, fmtPct],
@@ -332,6 +357,7 @@ function chartsGrid(m) {
   const defs = [
     { title: 'Gross Margin', values: d.grossMargin, fmt: fmtPct, color: '#3b9eff' },
     { title: 'Net Margin', values: d.netMargin, fmt: fmtPct, color: '#00e5a0' },
+    { title: 'Operating Margin', values: d.operatingMargin, fmt: fmtPct, color: '#ffc940' },
     { title: 'EPS (Diluted)', values: m.raw.epsDiluted, fmt: fmtPerShare(c), color: '#3b9eff' },
     { title: 'FCF / Share', values: d.fcfPerShare, fmt: fmtPerShare(c), color: '#00e5a0' },
     { title: 'Debt-to-Equity', values: d.debtToEquity, fmt: fmtRatio, color: '#ffc940' },

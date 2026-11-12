@@ -375,7 +375,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 4;
+export const DATA_VERSION = 5;
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -605,7 +605,7 @@ export function buildMetrics(facts, extra = {}) {
 
   const at = (key, i) => (i >= 0 ? raw[key][i] : null);
   const derived = {
-    grossMargin: [], netMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
+    grossMargin: [], netMargin: [], operatingMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
     debtToEquity: [], longTermDebtYears: [], currentRatio: [], roe: [],
     fcf: [], fcfPerShare: [], epsGrowth: [], netCash: [],
   };
@@ -647,6 +647,14 @@ export function buildMetrics(facts, extra = {}) {
 
     derived.grossMargin.push(round(div(gp, at('revenue', i))));
     derived.netMargin.push(round(div(ni, at('revenue', i))));
+    // Operating margin = operating income / revenue. N/A (with a reason) when either input is missing.
+    const revV = at('revenue', i);
+    if (opInc === null) {
+      noteCell('operatingMargin', years[i], 'Operating income is not reported for this year (some filers, including many IFRS filers, do not report it), so operating margin is N/A');
+    } else if (revV === null) {
+      noteCell('operatingMargin', years[i], 'Revenue is not reported for this year, so operating margin is N/A');
+    }
+    derived.operatingMargin.push(opInc !== null && revV !== null ? round(div(opInc, revV)) : null);
     derived.sgaPctGrossProfit.push(gp !== null && gp > 0 ? round(div(at('sga', i), gp)) : null);
     derived.interestPctOperatingIncome.push(opInc !== null && opInc > 0 ? round(div(at('interestExpense', i), opInc)) : null);
     derived.debtToEquity.push(equity !== null && equity > 0 ? round(div(at('totalLiabilities', i), equity)) : null);
