@@ -687,3 +687,5 @@ table.stmt-table tr.lvl-4 td:first-child { padding-left: 76px; }
 .rev-save { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
 .rev-save .field { flex: 1; min-width: 200px; margin-bottom: 0; }
 .rev-save .btn-inline { padding: 10px 18px; }
+
+.rule-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }

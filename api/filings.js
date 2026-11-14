@@ -1,6 +1,6 @@
 import sql from './_db.js';
 import { requireAuth } from './_auth.js';
-import { loadStatements, capexFromStatement, workingCapitalFromStatement } from './_statements.js';
+import { loadStatements, capexFromStatement, workingCapitalFromStatement, incomeFromStatement, gainEvidenceFromStatements } from './_statements.js';
 import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from './_sec.js';
 
 const USER_ID = 'local';
@@ -25,11 +25,16 @@ async function ensureTable() {
 
 const RECENT_YEARS = 3;
 
-// True when any of the latest years has no single-tag capex, or operating cash flow moved by more than 50%.
+// True when any of the latest years has no single-tag capex, no cost of revenue (and no gross profit) or no SG&A tag,
+// or operating cash flow moved by more than 50%.
 function needsStatement(m) {
   const n = m.years.length;
   for (let i = Math.max(0, n - RECENT_YEARS); i < n; i++) {
     if (m.capexMethod[i] !== 'tag') return true;
+    if (m.raw.costOfRevenue[i] === null && m.raw.grossProfit[i] === null) return true;
+    if (m.raw.sga[i] === null) return true;
+    // A tag-based gain/loss on asset sales must be confirmed against the as-filed statements
+    if (m.raw.gainOnAssetSales[i] !== null && m.incomeMethod?.gainOnAssetSales?.[i] !== 'statement') return true;
     const ocf = m.raw.operatingCashFlow[i];
     const prev = i > 0 ? m.raw.operatingCashFlow[i - 1] : null;
     if (ocf !== null && prev !== null && prev !== 0 && Math.abs(ocf - prev) / Math.abs(prev) > 0.5) return true;
@@ -104,10 +109,12 @@ export default async function handler(req, res) {
     if (filing && needsStatement(metrics)) {
       try {
         const { statements } = await loadStatements(target.cik, filing);
-        if (statements.cashflow) {
+        if (statements.cashflow || statements.income) {
           metrics = buildMetrics(facts, {
-            statementCapex: capexFromStatement(statements.cashflow),
-            statementWorkingCapital: workingCapitalFromStatement(statements.cashflow),
+            statementCapex: statements.cashflow ? capexFromStatement(statements.cashflow) : undefined,
+            statementWorkingCapital: statements.cashflow ? workingCapitalFromStatement(statements.cashflow) : undefined,
+            statementIncome: statements.income ? incomeFromStatement(statements.income) : undefined,
+            gainEvidence: gainEvidenceFromStatements(statements.income, statements.cashflow),
           });
         }
       } catch (err) {

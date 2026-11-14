@@ -154,6 +154,12 @@ const METRICS = {
     'us-gaap': ['OperatingIncomeLoss'],
     'ifrs-full': ['ProfitLossFromOperatingActivities'],
   },
+  // Gains (positive) and losses (negative) on selling assets such as vessels or property. Used for the "ex-gains" figures.
+  gainOnAssetSales: {
+    kind: 'flow',
+    'us-gaap': ['GainLossOnSaleOfPropertyPlantEquipment', 'GainLossOnSaleOfPropertyPlantAndEquipment', 'GainLossOnDispositionOfAssets', 'GainLossOnDispositionOfAssets1', 'GainLossOnSaleOfOtherAssets', 'GainLossOnDispositionOfOtherAssets'],
+    'ifrs-full': ['GainsLossesOnDisposalsOfPropertyPlantAndEquipment', 'GainsLossesOnDisposalsOfNoncurrentAssets'],
+  },
   interestExpense: {
     kind: 'flow',
     'us-gaap': ['InterestExpense', 'InterestExpenseDebt', 'InterestAndDebtExpense', 'InterestExpenseNonoperating'],
@@ -167,13 +173,13 @@ const METRICS = {
   epsDiluted: {
     kind: 'flow',
     unit: 'perShare',
-    'us-gaap': ['EarningsPerShareDiluted'],
-    'ifrs-full': ['DilutedEarningsLossPerShare'],
+    'us-gaap': ['EarningsPerShareDiluted', 'EarningsPerShareBasicAndDiluted'],
+    'ifrs-full': ['DilutedEarningsLossPerShare', 'BasicAndDilutedEarningsLossPerShare'],
   },
   dilutedShares: {
     kind: 'flow',
     unit: 'shares',
-    'us-gaap': ['WeightedAverageNumberOfDilutedSharesOutstanding'],
+    'us-gaap': ['WeightedAverageNumberOfDilutedSharesOutstanding', 'WeightedAverageNumberOfShareOutstandingBasicAndDiluted', 'WeightedAverageNumberOfSharesOutstandingBasicAndDiluted'],
     'ifrs-full': ['AdjustedWeightedAverageShares'],
   },
   cash: {
@@ -296,6 +302,8 @@ function annualSeries(concept, kind, wantedUnit) {
   for (const f of concept.units[unit]) {
     if (!ANNUAL_FORMS.has(f.form) || f.fp !== 'FY') continue;
     if (typeof f.val !== 'number' || !f.end) continue;
+    // A weighted share count of 0 is a filing artifact, never a real count: treat it as not reported
+    if (wantedUnit === 'shares' && !(f.val > 0)) continue;
     if (kind === 'flow') {
       if (!f.start) continue;
       const days = (Date.parse(f.end) - Date.parse(f.start)) / DAY;
@@ -375,7 +383,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 5;
+export const DATA_VERSION = 7;
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -534,7 +542,7 @@ function buildQualitySummary(quality, years) {
 // Long-term debt tags that already contain the current portion, so it must not be added again
 const LTD_TAGS_INCLUDING_CURRENT = new Set(['LongTermDebt']);
 // Extracted only to support another figure, so they don't count toward "metrics found"
-const COVERAGE_EXCLUDE = new Set(['currentDebt']);
+const COVERAGE_EXCLUDE = new Set(['currentDebt', 'gainOnAssetSales']);
 
 // Builds the metrics document stored in Neon and returned to the client.
 // `extra` carries figures derived from the as-filed statements (see api/_statements.js):
@@ -595,6 +603,60 @@ export function buildMetrics(facts, extra = {}) {
   });
   const capexDerivedYears = (m) => years.filter((_, i) => capexMethod[i] === m);
 
+  // Cost of revenue, SG&A and one-time gains for years where no tag provides them: read from the as-filed income
+  // statement, by fixed label rules (see incomeFromStatement in _statements.js). A value with a real tag is never replaced.
+  const incomeMethod = { costOfRevenue: years.map(() => null), sga: years.map(() => null), gainOnAssetSales: years.map(() => null) };
+  const lineText = (lines) => lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ');
+  years.forEach((fy, i) => {
+    const st = extra.statementIncome?.get(fy);
+    if (!st) return;
+    if (raw.costOfRevenue[i] === null && raw.grossProfit[i] === null && st.cost) {
+      raw.costOfRevenue[i] = st.cost.value;
+      incomeMethod.costOfRevenue[i] = 'statement';
+      noteCell('costOfRevenue', fy, `Derived from as-filed statement: ${lineText(st.cost.lines)}. Direct operating lines only (commissions, voyage, vessel operating and dry-docking expenses); depreciation, management fees, G&A and gains are excluded.${st.cost.skipped.length ? ` Not counted because already deducted in the revenue figure: ${lineText(st.cost.skipped)}.` : ''}`);
+      noteCell('grossProfit', fy, 'Revenue minus cost of revenue, where cost of revenue is derived from the as-filed statement (hover the cost of revenue cell for the rows used)');
+    }
+    if (raw.sga[i] === null && st.sga) {
+      raw.sga[i] = st.sga.value;
+      incomeMethod.sga[i] = 'statement';
+      noteCell('sga', fy, `Derived from as-filed statement: ${lineText(st.sga.lines)}. General and administrative plus management fees, including related-party fees.`);
+    }
+    if (raw.gainOnAssetSales[i] === null && st.gain) {
+      raw.gainOnAssetSales[i] = st.gain.value;
+      incomeMethod.gainOnAssetSales[i] = 'statement';
+      noteCell('gainOnAssetSales', fy, `Derived from as-filed statement: ${lineText(st.gain.lines)}`);
+    }
+  });
+
+  // A tag-based gain/loss is used in ex-gains figures only when an as-filed row confirms it for that fiscal year:
+  // an income statement row labeled as a gain/loss on sale, or the matching cash flow reconciliation row (a gain is a
+  // negative adjustment there). Amount within 1% (against the sum of the rows or any single row) and same sign.
+  // Gains read straight from as-filed rows are confirmed by construction.
+  const GAIN_TOLERANCE = 0.01;
+  const gainStatus = years.map(() => null); // 'statement' | 'income' | 'cashflow' | 'both' | 'unconfirmed' | null (no gain found)
+  const gainConfirmNote = years.map(() => null);
+  const matches = (ev, tag) => ev && [ev.value, ...ev.lines.map((l) => l.amount)].some((v) => Math.sign(v) === Math.sign(tag) && Math.abs(v - tag) <= GAIN_TOLERANCE * Math.abs(tag));
+  const signText = (v) => (v >= 0 ? 'gain' : 'loss');
+  years.forEach((fy, i) => {
+    const tag = raw.gainOnAssetSales[i];
+    if (tag === null) return;
+    if (incomeMethod.gainOnAssetSales[i] === 'statement') { gainStatus[i] = 'statement'; return; }
+    const ev = extra.gainEvidence?.get(fy);
+    const okIncome = matches(ev?.income, tag);
+    const okCash = matches(ev?.cashflow, tag);
+    const seen = [];
+    if (ev?.income) seen.push(`income statement ${ev.income.lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ')} (reads as a ${signText(ev.income.value)})`);
+    if (ev?.cashflow) seen.push(`cash flow ${ev.cashflow.lines.map((l) => `${l.label} ${money(-l.amount)}`).join('; ')} (an adjustment of ${money(-ev.cashflow.value)}, reads as a ${signText(ev.cashflow.value)})`);
+    if (okIncome || okCash) {
+      gainStatus[i] = okIncome && okCash ? 'both' : okIncome ? 'income' : 'cashflow';
+      gainConfirmNote[i] = `Tag value ${money(tag)} (${signText(tag)}) confirmed by the as-filed ${okIncome && okCash ? 'income statement and cash flow statement' : okIncome ? 'income statement' : 'cash flow statement'}: ${seen.join('; ')}.`;
+      noteCell('gainOnAssetSales', fy, gainConfirmNote[i]);
+    } else {
+      gainStatus[i] = 'unconfirmed';
+      noteCell('gainOnAssetSales', fy, `Gain/loss tag found but not confirmed by the as-filed statement. Tag value ${money(tag)} (${signText(tag)}); ${seen.length ? `as-filed rows show: ${seen.join('; ')}` : 'no matching gain/loss row in the as-filed statements for this year'}. Not used in ex-gains figures.`);
+    }
+  });
+
   // Gross profit: use the reported figure; else revenue - cost of revenue (both reported).
   const grossProfit = years.map((_, i) => {
     if (raw.grossProfit[i] !== null) return raw.grossProfit[i];
@@ -608,6 +670,8 @@ export function buildMetrics(facts, extra = {}) {
     grossMargin: [], netMargin: [], operatingMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
     debtToEquity: [], longTermDebtYears: [], currentRatio: [], roe: [],
     fcf: [], fcfPerShare: [], epsGrowth: [], netCash: [],
+    totalDebt: [], totalDebtYears: [], totalDebtYearsExGains: [],
+    operatingIncomeExGains: [], netIncomeExGains: [], netMarginExGains: [], roeExGains: [],
   };
   years.forEach((_, i) => {
     // Net cash (debt) = cash and equivalents - long-term debt - current portion of debt (when reported).
@@ -634,6 +698,25 @@ export function buildMetrics(facts, extra = {}) {
       netCash = cashV - ltdV - curDebtV;
     }
     derived.netCash.push(netCash);
+
+    // Total debt = long-term debt + current portion. When the current portion is not reported, it is not
+    // guessed: total debt then equals long-term debt, and the cell says so.
+    let totalDebt = null;
+    if (ltdV !== null) {
+      if (LTD_TAGS_INCLUDING_CURRENT.has(ltdTag)) {
+        totalDebt = ltdV;
+        noteCell('totalDebt', years[i], `As tagged (${ltdTag} already includes the current portion)`);
+      } else if (curDebtV === null) {
+        totalDebt = ltdV;
+        noteCell('totalDebt', years[i], 'The current portion of debt is not reported for this year, so total debt is long-term debt only');
+      } else if (curDebtV < 0) {
+        totalDebt = ltdV;
+        noteCell('totalDebt', years[i], 'The reported current portion of debt is negative, so it is not included');
+      } else {
+        totalDebt = ltdV + curDebtV;
+      }
+    }
+    derived.totalDebt.push(totalDebt);
 
     const gp = grossProfit[i];
     const ni = at('netIncome', i);
@@ -662,6 +745,25 @@ export function buildMetrics(facts, extra = {}) {
     derived.currentRatio.push(round(div(at('currentAssets', i), at('currentLiabilities', i))));
     derived.roe.push(equity !== null && equity > 0 ? round(div(ni, equity)) : null);
     derived.fcf.push(fcf);
+
+    // One-time gains/losses on asset sales: simple subtraction, no tax adjustment. N/A (not the reported figure)
+    // when no gain or loss figure was found for the year, so a company's own numbers are never mixed up with them.
+    // A tag-based gain that no as-filed row confirms makes no adjustment at all.
+    const gainRaw = at('gainOnAssetSales', i);
+    const gainV = i >= 0 && gainStatus[i] !== 'unconfirmed' ? gainRaw : null;
+    const gainFound = gainV !== null;
+    const exNote = gainFound ? `Reported figure minus the ${gainV >= 0 ? 'gain' : 'loss'} on asset sales (${money(gainV)}). Simple subtraction, no tax adjustment.`
+      : gainRaw !== null ? 'Gain/loss tag found but not confirmed by the as-filed statement' : null;
+    const opExG = gainFound && opInc !== null ? opInc - gainV : null;
+    const niExG = gainFound && ni !== null ? ni - gainV : null;
+    derived.operatingIncomeExGains.push(opExG);
+    derived.netIncomeExGains.push(niExG);
+    derived.netMarginExGains.push(round(div(niExG, revV)));
+    derived.roeExGains.push(equity !== null && equity > 0 ? round(div(niExG, equity)) : null);
+    // Debt vs earnings on total debt, on reported and on ex-gains earnings
+    derived.totalDebtYears.push(totalDebt !== null && ni !== null && ni > 0 ? round(div(totalDebt, ni)) : null);
+    derived.totalDebtYearsExGains.push(gainFound && totalDebt !== null && niExG !== null && niExG > 0 ? round(div(totalDebt, niExG)) : null);
+    if (exNote) for (const k of ['operatingIncomeExGains', 'netIncomeExGains', 'netMarginExGains', 'roeExGains', 'totalDebtYearsExGains']) noteCell(k, years[i], exNote);
     // Display-only flag: OCF moved by more than 50% and one working-capital line in the as-filed statement
     // is bigger than half of that move. No number is adjusted.
     const prevOcf = i > 0 ? raw.operatingCashFlow[i - 1] : null;
@@ -687,7 +789,10 @@ export function buildMetrics(facts, extra = {}) {
       }
     }
     derived.fcfPerShare.push(round(fcfPerShare, 4));
-    derived.epsGrowth.push(eps !== null && prevEps !== null && prevEps > 0 ? round((eps - prevEps) / prevEps) : null);
+    // Growth from a zero or negative base is "n/m" (not meaningful), not a missing value
+    derived.epsGrowth.push(eps !== null && prevEps !== null
+      ? (prevEps > 0 ? round((eps - prevEps) / prevEps) : 'n/m')
+      : null);
   });
 
   // 10-year FCF CAGR between the first and last years that have FCF (both must be positive)
@@ -711,12 +816,18 @@ export function buildMetrics(facts, extra = {}) {
   quality.summary = buildQualitySummary(quality, years);
   const byStatement = capexDerivedYears('statement');
   const byComponents = capexDerivedYears('components');
+  for (const [key, label] of [['costOfRevenue', 'cost of revenue'], ['sga', 'SG&A'], ['gainOnAssetSales', 'gains on asset sales']]) {
+    const ys = years.filter((_, i) => incomeMethod[key][i] === 'statement');
+    if (ys.length) quality.summary.push(`${label} for ${fmtYearRanges(ys)} derived from the as-filed statement (other years N/A: custom-tagged lines are not in the XBRL data)`);
+  }
   if (byStatement.length) quality.summary.push(`capex for ${fmtYearRanges(byStatement)} derived from the as-filed statement`);
   if (byComponents.length) quality.summary.push(`capex for ${fmtYearRanges(byComponents)} derived from components`);
 
   return {
     dataVersion: DATA_VERSION,
     capexMethod,
+    incomeMethod,
+    gainStatus,
     // A year with no debt tag of any kind and no interest expense shows "None reported" and passes the
     // debt-vs-earnings rule. A year with either one stays N/A.
     debt: {

@@ -528,7 +528,7 @@ function parseAmount(text) {
 }
 
 // Capital-type investing lines. Acquisitions of businesses, purchases of investments and loans never count.
-const CAPITAL_LINE = /\b(?:property|plant|equipment|fixed assets?|capital expenditures?|capital spending|capital improvements?|leasehold|software|technology|patents?|intangibles?|trademarks?|licen[cs]es?|buildings?|land|furniture|vehicles|machinery|improvements?|mineral (?:properties|interests)|oil and gas properties|development costs?|capitalized)\b/i;
+const CAPITAL_LINE = /\b(?:property|plant|equipment|fixed assets?|capital expenditures?|capital spending|capital improvements?|leasehold|software|technology|patents?|intangibles?|trademarks?|licen[cs]es?|buildings?|land|furniture|vehicles|machinery|improvements?|mineral (?:properties|interests)|oil and gas properties|development costs?|capitalized|vessels?|aircraft|under construction|construction in progress)\b/i;
 const NOT_CAPITAL_LINE = /acquisitions? of (?:businesses?|subsidiar|compan)|business(?:es)? acquisitions?|acquired businesses|net of cash acquired|acquire[sd]? (?:a |the )?businesses?|purchases? of (?:investments?|securities|marketable|short-term|available|held|treasury|bonds|certificates|deposits|notes)|investments? in (?:securities|affiliates|equity|marketable|unconsolidated|joint)|marketable|securit(?:y|ies)|\bloans?\b|notes? receivable|advances|proceeds|\bsales? of\b|disposals?|divest|maturit|redemption|collection|repayment|restricted cash|affiliate|joint venture|equity method|derivative|insurance|dividend/i;
 
 function investingSection(rows) {
@@ -564,6 +564,127 @@ export function capexFromStatement(cf) {
     }
     if (used.length) out.set(fy, { value: used.reduce((s, l) => s + l.amount, 0), lines: used });
   });
+  return out;
+}
+
+// ---------- Figures derived from the as-filed income statement ----------
+// Fixed label rules (not tuned to any company). They only run for years where no XBRL tag supplies the figure.
+
+// Direct operating lines. Depreciation, management fees, G&A, impairments and gains are never cost of revenue.
+const COST_LINE = /\bcommissions?\b|voyage expenses?|vessel operating expenses?|dry-?\s?dock/i;
+const COST_EXCLUDE = /depreciation|amortization|management fees?|general and administrative|\bgains?\b|impairment|revenues?\b/i;
+// G&A plus management fees (related-party fees included)
+const SGA_LINE = /general and administrative|management fees?/i;
+const SGA_EXCLUDE = /\bgains?\b|impairment|depreciation|amortization/i;
+// A subtotal that is already net of commissions. Commissions listed above it are not deducted a second time.
+const NET_REVENUE_ROW = /^(?:total )?net (?:revenues?|sales)\b|^(?:total )?revenues?,? net\b/i;
+const GAIN_WORD = /\bgains?\b/i;
+const LOSS_WORD = /\bloss(?:es)?\b/i;
+const SALE_WORD = /\b(?:sale|sales|disposal|disposals|disposition|disposed)\b/i;
+const CF_GAIN_EXCLUDE = /currency|translation|exchange|unrealized|derivative|hedg|extinguish|equity (?:income|method)|equity \(income\)|pension|fair value|impairment|investment securities/i;
+
+// Map(fiscalYear -> { cost?, sga?, gain? }), each { value, lines: [{ label, amount }], skipped?: [...] } in currency units.
+// cost: positive total of direct operating lines. sga: positive total. gain: positive gain / negative loss on asset sales
+// (rows with both words, like "gain/(loss) on sale", are skipped because their sign cannot be told from the label).
+export function incomeFromStatement(income) {
+  const out = new Map();
+  const scale = unitScale(income?.units);
+  if (!income || scale === null) return out;
+  const years = columnYears(income);
+  const rows = income.rows;
+  const netRevenueAt = rows.findIndex((r) => !r.header && NET_REVENUE_ROW.test(r.label));
+  const isLine = (r) => !r.header && !r.total;
+
+  const costRows = rows.map((r, idx) => ({ r, idx })).filter(({ r }) => isLine(r) && COST_LINE.test(r.label) && !COST_EXCLUDE.test(r.label));
+  const sgaRows = rows.filter((r) => isLine(r) && SGA_LINE.test(r.label) && !SGA_EXCLUDE.test(r.label));
+  const gainRows = rows.filter((r) => isLine(r) && SALE_WORD.test(r.label) && (GAIN_WORD.test(r.label) !== LOSS_WORD.test(r.label)));
+
+  years.forEach((fy, col) => {
+    if (fy === null) return;
+    const entry = {};
+    const amount = (r) => { const v = parseAmount(r.values[col]); return v === null ? null : v * scale; };
+
+    const used = [];
+    const skipped = [];
+    for (const { r, idx } of costRows) {
+      const v = amount(r);
+      if (v === null) continue;
+      const line = { label: r.label, amount: Math.abs(v) };
+      if (/\bcommissions?\b/i.test(r.label) && netRevenueAt >= 0 && idx < netRevenueAt) skipped.push(line);
+      else used.push(line);
+    }
+    if (used.length) entry.cost = { value: used.reduce((s, l) => s + l.amount, 0), lines: used, skipped };
+
+    const sgaUsed = [];
+    for (const r of sgaRows) {
+      const v = amount(r);
+      if (v !== null) sgaUsed.push({ label: r.label, amount: Math.abs(v) });
+    }
+    if (sgaUsed.length) entry.sga = { value: sgaUsed.reduce((s, l) => s + l.amount, 0), lines: sgaUsed };
+
+    const gainUsed = [];
+    for (const r of gainRows) {
+      const v = amount(r);
+      if (v === null || v === 0) continue;
+      gainUsed.push({ label: r.label, amount: GAIN_WORD.test(r.label) ? Math.abs(v) : -Math.abs(v) });
+    }
+    if (gainUsed.length) entry.gain = { value: gainUsed.reduce((s, l) => s + l.amount, 0), lines: gainUsed };
+
+    if (Object.keys(entry).length) out.set(fy, entry);
+  });
+  return out;
+}
+
+// Evidence used to confirm a tag-based gain/loss on asset sales. Map(fiscalYear -> { income?, cashflow? }), each
+// { value (positive gain / negative loss, currency units), lines: [{ label, amount }] } with the amounts signed as a gain (+) or loss (-).
+//  - Income statement: a row labeled as a gain or loss on sale/disposal. A one-word label (gain OR loss) fixes the sign;
+//    a "gain/(loss)" label takes the sign the row shows, since an income statement row shows its effect on income.
+//  - Cash flow reconciliation (operating section): a gain row is a NEGATIVE adjustment and a loss row a POSITIVE one, so
+//    the gain is the negated cash flow value whatever the label says.
+export function gainEvidenceFromStatements(income, cashflow) {
+  const out = new Map();
+  const put = (fy, kind, lines) => {
+    if (!lines.length) return;
+    const e = out.get(fy) || {};
+    e[kind] = { value: lines.reduce((s, l) => s + l.amount, 0), lines };
+    out.set(fy, e);
+  };
+  const labeled = (r) => !r.header && !r.total && SALE_WORD.test(r.label) && (GAIN_WORD.test(r.label) || LOSS_WORD.test(r.label));
+
+  const iScale = unitScale(income?.units);
+  if (income && iScale !== null) {
+    const rows = income.rows.filter(labeled);
+    columnYears(income).forEach((fy, col) => {
+      if (fy === null) return;
+      const lines = [];
+      for (const r of rows) {
+        const raw = parseAmount(r.values[col]);
+        if (raw === null || raw === 0) continue;
+        const g = GAIN_WORD.test(r.label), l = LOSS_WORD.test(r.label);
+        lines.push({ label: r.label, amount: (g && l ? raw : g ? Math.abs(raw) : -Math.abs(raw)) * iScale });
+      }
+      put(fy, 'income', lines);
+    });
+  }
+
+  const cScale = unitScale(cashflow?.units);
+  if (cashflow && cScale !== null) {
+    const end = cashflow.rows.findIndex((r) => !r.header && /operating activities/i.test(r.label) && /^(?:net )?cash|total/i.test(r.label));
+    // Reconciliation rows are often labeled just "(gains) losses, net", so a sale/disposal word is not required here:
+    // the 1% amount match and the sign test do the identifying. Currency, equity-method, fair-value and similar lines are left out.
+    const rows = (end < 0 ? cashflow.rows : cashflow.rows.slice(0, end))
+      .filter((r) => !r.header && !r.total && (GAIN_WORD.test(r.label) || LOSS_WORD.test(r.label)) && !CF_GAIN_EXCLUDE.test(r.label));
+    columnYears(cashflow).forEach((fy, col) => {
+      if (fy === null) return;
+      const lines = [];
+      for (const r of rows) {
+        const raw = parseAmount(r.values[col]);
+        if (raw === null || raw === 0) continue;
+        lines.push({ label: r.label, amount: -raw * cScale });
+      }
+      put(fy, 'cashflow', lines);
+    });
+  }
   return out;
 }
 

@@ -92,14 +92,16 @@ function screenerResults(m) {
     latest_value: isNum(value) ? Number(value.toFixed(4)) : null,
     status: isNum(value) ? (test(value) ? 'PASS' : 'FAIL') : 'N/A',
   });
+  // Mirrors the Filings tab: gain-adjusted (ex-gains) figures are judged whenever a gain or loss on asset sales was found
   const n = m.raw.netIncome.length - 1;
-  const ltd = m.raw.longTermDebt[n];
-  const ni = m.raw.netIncome[n];
+  const pick = (reported, exGains) => (isNum(last(exGains)) ? last(exGains) : last(reported));
+  const ltd = last(d.totalDebt);
+  const ni = pick(m.raw.netIncome, d.netIncomeExGains);
   let ltdRule;
-  if (!isNum(ltd) || !isNum(ni)) ltdRule = { rule: 'Long-term debt <= 4 years of earnings', latest_value: null, status: 'N/A' };
-  else if (ltd <= 0) ltdRule = { rule: 'Long-term debt <= 4 years of earnings', latest_value: 0, status: 'PASS' };
-  else if (ni <= 0) ltdRule = { rule: 'Long-term debt <= 4 years of earnings', latest_value: null, status: 'FAIL', note: 'net loss in latest year while carrying long-term debt' };
-  else ltdRule = { rule: 'Long-term debt <= 4 years of earnings', latest_value: Number((ltd / ni).toFixed(2)), status: ltd / ni <= 4 ? 'PASS' : 'FAIL' };
+  if (!isNum(ltd) || !isNum(ni)) ltdRule = { rule: 'Long-term debt (total debt) <= 4 years of earnings', latest_value: null, status: 'N/A' };
+  else if (ltd <= 0) ltdRule = { rule: 'Long-term debt (total debt) <= 4 years of earnings', latest_value: 0, status: 'PASS' };
+  else if (ni <= 0) ltdRule = { rule: 'Long-term debt (total debt) <= 4 years of earnings', latest_value: null, status: 'FAIL', note: 'net loss in latest year while carrying long-term debt' };
+  else ltdRule = { rule: 'Long-term debt (total debt) <= 4 years of earnings', latest_value: Number((ltd / ni).toFixed(2)), status: ltd / ni <= 4 ? 'PASS' : 'FAIL' };
 
   const consistency = (name, steps) => {
     const withData = steps.filter((s) => s !== null);
@@ -108,6 +110,9 @@ function screenerResults(m) {
     return { rule: name, latest_value: `${up} of ${withData.length} years up`, status: up / withData.length >= 0.75 ? 'PASS' : 'FAIL' };
   };
   const epsSteps = d.epsGrowth.map((g) => (isNum(g) ? g > 0 : null));
+  const epsLossYears = m.years.filter((_, i) => isNum(m.raw.epsDiluted[i]) && m.raw.epsDiluted[i] <= 0);
+  let epsRule = consistency('Consistent EPS growth', epsSteps);
+  if (epsLossYears.length) epsRule = { rule: 'Consistent EPS growth', latest_value: null, status: 'FAIL', note: `loss year in window: ${epsLossYears[epsLossYears.length - 1]}` };
   const reSteps = m.raw.retainedEarnings.map((re, i) => {
     const prev = i > 0 ? m.raw.retainedEarnings[i - 1] : null;
     return isNum(re) && isNum(prev) ? re > prev : null;
@@ -115,13 +120,13 @@ function screenerResults(m) {
 
   return [
     latestRule('Gross margin >= 40%', last(d.grossMargin), (v) => v >= 0.4),
-    latestRule('Net margin >= 20%', last(d.netMargin), (v) => v >= 0.2),
+    latestRule('Net margin >= 20%', pick(d.netMargin, d.netMarginExGains), (v) => v >= 0.2),
     latestRule('SG&A <= 30% of gross profit', last(d.sgaPctGrossProfit), (v) => v <= 0.3),
     latestRule('Interest <= 15% of operating income', last(d.interestPctOperatingIncome), (v) => v <= 0.15),
     latestRule('Debt-to-equity <= 0.80', last(d.debtToEquity), (v) => v <= 0.8),
     ltdRule,
-    consistency('Consistent EPS growth', epsSteps),
-    latestRule('ROE >= 25% (optional)', last(d.roe), (v) => v >= 0.25),
+    epsRule,
+    latestRule('ROE >= 25% (optional)', pick(d.roe, d.roeExGains), (v) => v >= 0.25),
     latestRule('Current ratio > 1 (optional)', last(d.currentRatio), (v) => v > 1),
     consistency('Retained earnings rising (optional)', reSteps),
   ];

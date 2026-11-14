@@ -74,22 +74,47 @@ function yearly(values, test) {
   return values.map((value) => (isNum(value) ? { value, pass: test(value) } : { value: null, pass: null }));
 }
 
+const EX_GAINS_TIP = 'Pass/fail uses the ex-gains value (reported figure minus gains or losses on asset sales, no tax adjustment) in any year where such a gain or loss was found. The as-reported value is shown underneath.';
+
+// Like yearly(), but the figure that is judged is the ex-gains one whenever it exists for the year.
+// The as-reported figure rides along for display.
+function yearlyEx(reported, exGains, test, gainStatus) {
+  return reported.map((rep, i) => {
+    const ex = exGains?.[i];
+    const useEx = isNum(ex);
+    const value = useEx ? ex : rep;
+    if (!isNum(value)) return { value: null, pass: null };
+    return { value, pass: test(value), adj: useEx, unconfirmed: gainStatus?.[i] === 'unconfirmed', reported: isNum(rep) ? rep : null };
+  });
+}
+const UNCONFIRMED_NOTE = 'gain tag not confirmed; reported value used';
+
 function buildRules(m) {
   const r = m.raw;
   const d = m.derived;
 
-  const ltDebtYears = r.longTermDebt.map((debt, i) => {
-    const earnings = r.netIncome[i];
+  // Total debt (long-term + current portion) against earnings; earnings are ex-gains whenever a gain or loss was found
+  const ltDebtYears = d.totalDebt.map((debt, i) => {
+    const exEarnings = d.netIncomeExGains?.[i];
+    const adj = isNum(exEarnings);
+    const earnings = adj ? exEarnings : r.netIncome[i];
+    const reported = d.totalDebtYears[i];
     // No debt tag anywhere and no interest expense that year: shown as "None reported" and passes
     if (m.debt?.noDebtYears?.[i]) return { value: null, pass: true, note: NONE_REPORTED };
     if (!isNum(debt) || !isNum(earnings)) return { value: null, pass: null };
+    const unconfirmed = m.gainStatus?.[i] === 'unconfirmed';
     if (debt <= 0) return { value: 0, pass: true };
-    if (earnings <= 0) return { value: null, pass: false, note: 'Loss' };
+    if (earnings <= 0) return { value: null, pass: false, note: 'Loss', adj, unconfirmed, reported: isNum(reported) ? reported : null };
     const years = debt / earnings;
-    return { value: years, pass: years <= 4 };
+    return { value: years, pass: years <= 4, adj, unconfirmed, reported: isNum(reported) ? reported : null };
   });
 
   const epsGrowth = yearly(d.epsGrowth, (g) => g > 0);
+  // Any loss year (EPS of zero or less) in the window fails the consistency rule outright
+  const lossYears = m.years.filter((_, i) => isNum(r.epsDiluted[i]) && r.epsDiluted[i] <= 0);
+  const epsOverride = lossYears.length
+    ? { pass: false, note: `loss year in window: ${lossYears[lossYears.length - 1]}`, tip: `Years with EPS of zero or less: ${lossYears.join(', ')}. One loss year in the window fails this rule; growth from a zero or negative base shows as n/m.` }
+    : null;
   const reRising = r.retainedEarnings.map((re, i) => {
     const prev = i > 0 ? r.retainedEarnings[i - 1] : null;
     if (!isNum(re) || !isNum(prev)) return { value: null, pass: null };
@@ -98,16 +123,16 @@ function buildRules(m) {
 
   const core = [
     { label: 'Gross margin ≥ 40%', fmt: fmtPct, series: yearly(d.grossMargin, (v) => v >= 0.4) },
-    { label: 'Net margin ≥ 20%', fmt: fmtPct, series: yearly(d.netMargin, (v) => v >= 0.2) },
+    { label: 'Net margin ≥ 20%', fmt: fmtPct, tip: EX_GAINS_TIP, series: yearlyEx(d.netMargin, d.netMarginExGains, (v) => v >= 0.2, m.gainStatus) },
     { label: 'SG&A ≤ 30% of gross profit', fmt: fmtPct, series: yearly(d.sgaPctGrossProfit, (v) => v <= 0.3) },
     { label: 'Interest ≤ 15% of operating income', fmt: fmtPct, series: yearly(d.interestPctOperatingIncome, (v) => v <= 0.15) },
     { label: 'Debt-to-equity ≤ 0.80', fmt: fmtRatio, series: yearly(d.debtToEquity, (v) => v <= 0.8) },
-    { label: 'Long-term debt ≤ 4 years of earnings', fmt: fmtYears, series: ltDebtYears },
-    { label: 'Consistent EPS growth', fmt: fmtPct, series: epsGrowth, consistency: true },
+    { label: 'Long-term debt ≤ 4 years of earnings', fmt: fmtYears, tip: `Uses total debt (long-term debt plus the current portion, when reported) divided by earnings. ${EX_GAINS_TIP}`, series: ltDebtYears },
+    { label: 'Consistent EPS growth', fmt: fmtPct, series: epsGrowth, consistency: true, override: epsOverride, tip: epsOverride?.tip },
   ];
   const optional = [
     { label: 'Operating margin (informational)', fmt: fmtPct, info: true, series: d.operatingMargin.map((value) => ({ value: isNum(value) ? value : null, pass: null })) },
-    { label: 'ROE ≥ 25%', fmt: fmtPct, series: yearly(d.roe, (v) => v >= 0.25) },
+    { label: 'ROE ≥ 25%', fmt: fmtPct, tip: EX_GAINS_TIP, series: yearlyEx(d.roe, d.roeExGains, (v) => v >= 0.25, m.gainStatus) },
     { label: 'Current ratio > 1', fmt: fmtRatio, series: yearly(d.currentRatio, (v) => v > 1) },
     { label: 'Retained earnings rising', fmt: (v) => fmtCompact(v, m.currency), series: reRising, consistency: true },
   ];
@@ -119,6 +144,7 @@ function evaluate(rule) {
   const withData = rule.series.filter((s) => s.pass !== null);
   const passed = withData.filter((s) => s.pass).length;
   const latest = rule.series[rule.series.length - 1];
+  if (rule.override) return { pass: rule.override.pass, passed, total: withData.length, latest: { value: null, pass: rule.override.pass, note: rule.override.note } };
   let pass = null;
   if (rule.consistency) {
     if (withData.length >= MIN_CONSISTENCY_POINTS) pass = passed / withData.length >= CONSISTENCY_PASS_RATE;
@@ -159,9 +185,16 @@ function ruleRow(rule) {
   if (rule.info) return infoRow(rule);
   const ev = evaluate(rule);
   const latestText = ev.latest?.note ?? (ev.latest && isNum(ev.latest.value) ? rule.fmt(ev.latest.value) : NA);
+  // When the judged figure is the ex-gains one, say so and show the as-reported figure underneath
+  const adj = ev.latest?.adj === true && !ev.latest.note;
+  const valueCell = el('div', { class: `rule-value mono${latestText === NA ? ' na' : ''}` }, [
+    adj ? `${latestText} ex-gains` : latestText,
+    adj ? el('div', { class: 'rule-sub', text: `${isNum(ev.latest.reported) ? rule.fmt(ev.latest.reported) : NA} as reported` }) : null,
+    ev.latest?.unconfirmed && !adj ? el('div', { class: 'rule-sub', text: UNCONFIRMED_NOTE, attrs: { title: 'Gain/loss tag found but not confirmed by the as-filed statement' } }) : null,
+  ]);
   return el('div', { class: 'rule-row' }, [
-    el('div', { class: 'rule-label', text: rule.label }),
-    el('div', { class: `rule-value mono${latestText === NA ? ' na' : ''}`, text: latestText }),
+    el('div', { class: 'rule-label', text: rule.label, attrs: rule.tip ? { title: rule.tip } : {} }),
+    valueCell,
     pill(ev.pass),
     el('div', { class: 'rule-years mono', text: ev.total ? `${ev.passed}/${ev.total} yrs` : NA }),
   ]);
@@ -177,7 +210,7 @@ function scorecardCard(m) {
   ]);
   return el('div', { class: 'card' }, [
     el('div', { class: 'section-label', text: 'Screener Scorecard' }),
-    el('div', { class: 'score-summary mono', text: `${passCount} of ${scoredCount} scored core rules passed` }),
+    el('div', { class: 'score-summary mono', text: `${passCount} of ${core.length} core rules passed${scoredCount < core.length ? ` (${core.length - scoredCount} not scored: N/A)` : ''}` }),
     head,
     ...core.map(ruleRow),
     el('div', { class: 'section-label sub', text: 'Optional Rules' }),
@@ -197,8 +230,13 @@ function tableCard(m) {
       ['Revenue', r.revenue, money], ['Cost of revenue', r.costOfRevenue, money],
       [m.grossProfitDerived ? 'Gross profit (revenue − cost)' : 'Gross profit', r.grossProfit, money],
       ['SG&A', r.sga, money], ['R&D', r.rnd, money], ['Depreciation', r.depreciation, money],
-      ['Operating income', r.operatingIncome, money], ['Interest expense', r.interestExpense, money],
-      ['Net income', r.netIncome, money], ['EPS (diluted)', r.epsDiluted, fmtPerShare(c)],
+      ['Operating income', r.operatingIncome, money],
+      ['Non-recurring gains/(losses) on asset sales', r.gainOnAssetSales, money, 'Gain (positive) or loss (negative) on selling assets such as vessels or property, from the XBRL tag or, if there is none, from an as-filed statement row labeled gain/loss on sale. Hover a cell for its source.'],
+      ['Operating income ex-gains', d.operatingIncomeExGains, money, 'Operating income minus the gain on asset sales. Simple subtraction, no tax adjustment. N/A when no gain or loss figure was found for the year.'],
+      ['Interest expense', r.interestExpense, money],
+      ['Net income', r.netIncome, money],
+      ['Net income ex-gains', d.netIncomeExGains, money, 'Net income minus the gain on asset sales. Simple subtraction, no tax adjustment. N/A when no gain or loss figure was found for the year.'],
+      ['EPS (diluted)', r.epsDiluted, fmtPerShare(c)],
       ['Diluted shares', r.dilutedShares, fmtShares],
     ]],
     ['Balance Sheet', [
@@ -208,7 +246,10 @@ function tableCard(m) {
       ['Total assets', r.totalAssets, money],
       ['Total current assets', r.currentAssets, money], ['Total current liabilities', r.currentLiabilities, money],
       ['Total liabilities', r.totalLiabilities, money], ["Shareholders' equity", r.equity, money],
-      ['Long-term debt', r.longTermDebt, money], ['Retained earnings', r.retainedEarnings, money],
+      ['Long-term debt', r.longTermDebt, money],
+      ['Current portion of long-term debt', r.currentDebt, money, 'Debt due within a year, as tagged by the company'],
+      ['Total debt', d.totalDebt, money, 'Long-term debt plus the current portion. If the current portion is not reported for a year, total debt equals long-term debt only (the cell says so).'],
+      ['Retained earnings', r.retainedEarnings, money],
       ['Net receivables', r.netReceivables, money],
     ]],
     ['Cash Flow', [
@@ -217,10 +258,13 @@ function tableCard(m) {
     ]],
     ['Ratios', [
       ['Gross margin', d.grossMargin, fmtPct], ['Net margin', d.netMargin, fmtPct],
+      ['Net margin ex-gains', d.netMarginExGains, fmtPct, 'Net income ex-gains divided by revenue. N/A when no gain or loss figure was found for the year.'],
       ['Operating margin', d.operatingMargin, fmtPct, 'Operating income ÷ revenue. N/A when either is not reported; filers that report no operating income (e.g. many IFRS filers such as Barrick) stay N/A.'],
       ['SG&A % of gross profit', d.sgaPctGrossProfit, fmtPct], ['Interest % of operating income', d.interestPctOperatingIncome, fmtPct],
-      ['Debt-to-equity', d.debtToEquity, fmtRatio], ['Long-term debt / earnings', d.longTermDebtYears, fmtYears],
-      ['Current ratio', d.currentRatio, fmtRatio], ['ROE', d.roe, fmtPct], ['EPS growth', d.epsGrowth, fmtPct],
+      ['Debt-to-equity', d.debtToEquity, fmtRatio], ['Long-term debt / earnings', d.longTermDebtYears, fmtYears, 'Long-term debt only (no current portion) divided by reported net income'],
+      ['Total debt / earnings', d.totalDebtYears, fmtYears, 'Total debt divided by reported net income'],
+      ['Total debt / earnings ex-gains', d.totalDebtYearsExGains, fmtYears, 'Total debt divided by net income ex-gains. The scorecard rule uses this figure whenever it exists.'],
+      ['Current ratio', d.currentRatio, fmtRatio], ['ROE', d.roe, fmtPct], ['ROE ex-gains', d.roeExGains, fmtPct, 'Net income ex-gains divided by shareholders equity'], ['EPS growth', d.epsGrowth, fmtPct, 'n/m means growth from a zero or negative EPS, which is not meaningful'],
     ]],
   ];
 
@@ -254,8 +298,9 @@ function tableCard(m) {
           const note = metricKey ? m.quality?.cellNotes?.[metricKey]?.[m.years[i]] : null;
           const cls = [isNum(v) ? '' : 'na', note ? (isNum(v) ? 'cell-adjusted' : 'cell-note') : ''].filter(Boolean).join(' ');
           // A year with no debt tag of any kind and no interest expense shows "None reported" rather than N/A
+          const nm = v === 'n/m';
           const none = !isNum(v) && (metricKey === 'longTermDebt' || metricKey === 'longTermDebtYears') && m.debt?.noDebtYears?.[i];
-          return el('td', { class: cls, text: isNum(v) ? fmt(v) : none ? NONE_REPORTED : NA, attrs: note ? { title: note } : none ? { title: 'No debt is reported in the filings for this year, and there is no interest expense' } : {} });
+          return el('td', { class: cls, text: isNum(v) ? fmt(v) : nm ? 'n/m' : none ? NONE_REPORTED : NA, attrs: note ? { title: note } : nm ? { title: 'Growth from a zero or negative EPS is not meaningful' } : none ? { title: 'No debt is reported in the filings for this year, and there is no interest expense' } : {} });
         }),
       ]));
     }
