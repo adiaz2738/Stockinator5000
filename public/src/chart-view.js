@@ -1,19 +1,20 @@
 import { TOOLS, TOOL_GROUPS, defaultStyle, registerAll, compareStore } from './chart-overlays.js';
 import {
   SAMPLE_TICKERS, NO_DATA_MESSAGE, MAX_COMPARE, PERIODS, TF_GROUPS, TF_ENABLED, IND_KEYS,
-  tokens, loadDaily, aggregate, loadSettings, saveSettings, settingsKey, loadGlobal, saveGlobal,
+  tokens, loadDaily, aggregate, loadSettings, saveSettings, settingsKey, loadGlobal, saveGlobal, failureMessage,
 } from './chart-data.js';
 
-// The reusable chart component. Used by the Charts page, the Filings "Chart" sub-tab (mode 'full') and the compact
-// read-only price chart on the company view (mode 'compact'). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
+// The reusable chart component. Used by the Charts page (mode 'full') and the Price card on the Filings company view
+// (mode 'card': same features, icon-only toolbars, can expand in place). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
 //
-//   const view = await mountChartView(hostElement, { ticker, mode, onTickerChange, layout, onExpand })
+//   const view = await mountChartView(hostElement, { ticker, mode, location, onTickerChange, layout, onOpenInCharts })
 //   view.destroy()
 //
-// Drawings are shared per ticker: every chart showing a ticker reads and writes the same saved drawings, and charts
-// open at the same time (or in other tabs) pick up each other's changes.
+// Drawings and indicator settings are shared per ticker: every chart showing a ticker reads and writes the same saved
+// data, and charts open at the same time (or in other tabs) pick up each other's changes. Zoom, timeframe, volume options
+// and compare tickers are independent per location (opts.location: 'page-0', 'page-1', 'card').
 
-const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,7}$/;
+const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 const VALID_TOOLS = TOOLS.map((t) => t.name);
 const views = new Set();
 
@@ -54,6 +55,12 @@ const ICONS = {
   fullscreen: [['path', { d: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5' }]],
   gear: [['circle', { cx: 12, cy: 12, r: 3 }], ['path', { d: 'M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1' }]],
   star: [['path', { d: 'M12 4l2.4 5 5.4.7-4 3.8 1 5.4L12 16.3 7.2 18.9l1-5.4-4-3.8 5.4-.7z' }]],
+  indicators: [['path', { d: 'M3 17l5-6 4 3 6-8 3 4' }]],
+  compare: [['circle', { cx: 12, cy: 12, r: 8 }], ['path', { d: 'M12 8v8M8 12h8' }]],
+  fit: [['path', { d: 'M3 12h18M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3' }]],
+  expand: [['path', { d: 'M9 4H4v5M15 20h5v-5M4 4l6 6M20 20l-6-6' }]],
+  minimize: [['path', { d: 'M10 4v6H4M14 20v-6h6M10 10L4 4M14 14l6 6' }]],
+  charts: [['path', { d: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-6' }]],
   one: [['rect', { x: 4, y: 5, width: 16, height: 14, rx: 2 }]],
   two: [['rect', { x: 4, y: 5, width: 16, height: 14, rx: 2 }], ['line', { x1: 12, y1: 5, x2: 12, y2: 19 }]],
   chevron: [['path', { d: 'M9 6l6 6-6 6' }]],
@@ -165,9 +172,11 @@ export async function mountChartView(host, opts = {}) {
 }
 
 function createView(kc, c, host, opts) {
-  const compact = opts.mode === 'compact';
+  const card = opts.mode === 'card';
+  const loc = opts.location || (card ? 'card' : 'page-0');
+  let expanded = false;
   let tkr = String(opts.ticker || '').toUpperCase();
-  let settings = loadSettings(tkr, c, VALID_TOOLS);
+  let settings = loadSettings(tkr, c, VALID_TOOLS, loc);
   const G = loadGlobal(c);
   let chart = null;
   let destroyed = false;
@@ -179,7 +188,7 @@ function createView(kc, c, host, opts) {
   const cmpIds = new Map();
 
   // ----- DOM skeleton -----
-  const root = el('div', { class: `vlc-view${compact ? ' compact' : ''}` });
+  const root = el('div', { class: `vlc-view${card ? ' cardmode' : ''}` });
   const top = el('div', { class: 'vlc-top' });
   const body = el('div', { class: 'vlc-body' });
   const left = el('div', { class: 'vlc-left' });
@@ -189,13 +198,11 @@ function createView(kc, c, host, opts) {
   const floatBar = el('div', { class: 'vlc-float', attrs: { hidden: '' } });
   const msg = el('div', { class: 'vlc-msg', attrs: { hidden: '' } });
   stage.append(canvas, legend, floatBar, msg);
-  if (!compact) body.append(left);
-  body.append(stage);
-  if (!compact) root.append(top);
-  root.append(body);
+  body.append(left, stage);
+  root.append(top, body);
   host.append(root);
 
-  const persist = () => saveSettings(tkr, settings);
+  const persist = () => saveSettings(tkr, settings, loc);
   const persistGlobal = () => saveGlobal(G);
 
   function setMsg(text) { msg.textContent = text || ''; msg.hidden = !text; }
@@ -242,22 +249,20 @@ function createView(kc, c, host, opts) {
     lg.tf = el('span', { class: 'vlc-lg-tf', text: TF_LABEL[settings.tf] || settings.tf });
     lg.o = el('span', { class: 'mono' }); lg.h = el('span', { class: 'mono' }); lg.l = el('span', { class: 'mono' }); lg.cl = el('span', { class: 'mono' }); lg.chg = el('span', { class: 'mono' }); lg.v = el('span', { class: 'mono vlc-dim' });
     const pair = (k, node) => el('span', { class: 'vlc-lg-pair' }, [el('span', { class: 'vlc-dim', text: k }), node]);
-    if (compact) lgLine.append(lg.sym, pair('', lg.cl), lg.chg);
-    else lgLine.append(lg.sym, lg.tf, pair('O', lg.o), pair('H', lg.h), pair('L', lg.l), pair('C', lg.cl), lg.chg, pair('Vol', lg.v));
+    lgLine.append(lg.sym, lg.tf, pair('O', lg.o), pair('H', lg.h), pair('L', lg.l), pair('C', lg.cl), lg.chg, pair('Vol', lg.v));
   }
   let chipRefs = [];
   let relegendTimer = 0;
   function renderChips() {
     lgChips.replaceChildren();
     chipRefs = [];
-    if (compact) return;
     for (const key of IND_KEYS) {
       const ind = settings.ind[key];
       if (!ind.on) continue;
       const val = el('span', { class: 'mono vlc-chip-val' });
       lgChips.append(el('span', { class: 'vlc-chip', attrs: { style: `--chip:${ind.color}` } }, [
         el('span', { class: 'vlc-chip-dot' }), el('span', { class: 'mono', text: ind.label }), val,
-        el('button', { class: 'vlc-chip-x', text: '×', attrs: { type: 'button', 'aria-label': `Remove ${ind.label}`, title: `Remove ${ind.label}` }, on: { click: () => { ind.on = false; persist(); applyIndicator(key); renderChips(); updateLegend(); } } }),
+        el('button', { class: 'vlc-chip-x', text: '×', attrs: { type: 'button', 'aria-label': `Remove ${ind.label}`, title: `Remove ${ind.label}` }, on: { click: () => { ind.on = false; saveInd(); applyIndicator(key); renderChips(); updateLegend(); } } }),
       ]));
       chipRefs.push({ type: 'ind', key, val });
     }
@@ -305,8 +310,10 @@ function createView(kc, c, host, opts) {
 
   // ----- indicators, volume, compare -----
   const indId = (key) => `vl_${key}`;
+  // Indicator settings are shared per ticker: save, then let other charts on this ticker pick them up
+  function saveInd() { persist(); for (const v of views) if (v !== api && v.ticker === tkr) v.reloadShared(); }
   function applyIndicator(key) {
-    if (!chart || compact) return;
+    if (!chart) return;
     const ind = settings.ind[key];
     const exists = chart.getIndicators({ id: indId(key) }).length > 0;
     if (!ind.on) { if (exists) chart.removeIndicator({ id: indId(key) }); return; }
@@ -316,7 +323,7 @@ function createView(kc, c, host, opts) {
   }
   function applyVolume() {
     if (!chart) return;
-    const v = compact ? { on: true, mode: 'direction', color: c.blue, opacity: 0.45, height: 56 } : settings.vol;
+    const v = settings.vol;
     const existing = chart.getIndicators({ name: 'VL_VOL' })[0];
     if (!v.on) { if (existing) chart.removeIndicator({ name: 'VL_VOL' }); return; }
     const extendData = { mode: v.mode, color: v.color, opacity: v.opacity, up: G.candle.up, down: G.candle.down };
@@ -325,7 +332,7 @@ function createView(kc, c, host, opts) {
     chart.setPaneOptions({ id: 'vl_vol_pane', height: v.height, minHeight: 30 });
   }
   async function refreshCompare() {
-    if (!chart || compact) return;
+    if (!chart) return;
     for (const [t, id] of [...cmpIds]) if (!settings.compare.includes(t)) { chart.removeIndicator({ id }); cmpIds.delete(t); }
     for (let i = 0; i < settings.compare.length; i++) {
       const t = settings.compare[i];
@@ -349,7 +356,7 @@ function createView(kc, c, host, opts) {
   async function addCompare(raw) {
     const t = String(raw || '').trim().toUpperCase();
     if (!TICKER_RE.test(t) || t === tkr || settings.compare.includes(t) || settings.compare.length >= MAX_COMPARE) return 'Enter a different ticker.';
-    try { await loadDaily(t); } catch (err) { return NO_DATA_MESSAGE; }
+    try { await loadDaily(t); } catch (err) { return failureMessage(err); }
     settings.compare.push(t);
     persist();
     renderChips();
@@ -363,16 +370,17 @@ function createView(kc, c, host, opts) {
     refreshCompare();
   }
 
-  // ----- fit all bars to the width, with a few bars of right padding -----
+  // ----- visible range: daily opens on the last ~2 years, weekly and monthly on everything; "Fit all" shows all bars -----
   const RIGHT_PAD_BARS = 4;
-  function fitAll() {
+  const DEFAULT_DAILY_BARS = 504;
+  function fitAll(all = false) {
     if (!chart) return;
     const list = chart.getDataList();
     const size = chart.getSize('candle_pane', 'main');
     if (!list.length) return;
     if (!size || size.width < 60) { fitPending = true; return; }
     fitPending = false;
-    const n = compact ? Math.min(list.length, opts.fitBars || 252) : list.length;
+    const n = !all && settings.tf === 'D' ? Math.min(list.length, DEFAULT_DAILY_BARS) : list.length;
     const space = size.width / (n + RIGHT_PAD_BARS);
     chart.setOffsetRightDistance(space * RIGHT_PAD_BARS);
     chart.setBarSpace(space);
@@ -396,7 +404,7 @@ function createView(kc, c, host, opts) {
     closeFloat();
     destroyChart();
     tkr = next;
-    settings = loadSettings(tkr, c, VALID_TOOLS);
+    settings = loadSettings(tkr, c, VALID_TOOLS, loc);
     opts.onTickerChange?.(tkr);
     if (tickerInput) tickerInput.value = tkr;
     if (newTabLink) newTabLink.setAttribute('href', `/chart/${encodeURIComponent(tkr)}`);
@@ -417,7 +425,7 @@ function createView(kc, c, host, opts) {
     if (!chart) return;
     settings.drawings = serialise();
     persist();
-    for (const v of views) if (v !== api && v.ticker === tkr) v.reloadDrawings();
+    for (const v of views) if (v !== api && v.ticker === tkr) v.reloadShared();
   }
   // Removals the view makes itself (reloading shared drawings, clearing, cancelling) must not trigger a save, or two views
   // showing the same ticker would keep reloading each other
@@ -458,9 +466,19 @@ function createView(kc, c, host, opts) {
       chart.createOverlay({ name: d.name, paneId: 'candle_pane', points: d.points, extendData: d.extendData, needDefaultYAxisFigure: d.extendData?.priceTag !== false, ...wire() });
     }
   }
-  function reloadDrawings() {
-    if (!chart || compact) return;
-    try { settings.drawings = loadSettings(tkr, c, VALID_TOOLS).drawings; } catch (err) { return; }
+  // Another chart (or browser tab) changed this ticker's shared drawings or indicators
+  function reloadShared() {
+    if (!chart) return;
+    let fresh;
+    try { fresh = loadSettings(tkr, c, VALID_TOOLS, loc); } catch (err) { return; }
+    let indChanged = false;
+    for (const k of IND_KEYS) {
+      const a = settings.ind[k], b = fresh.ind[k];
+      if (a.on !== b.on || a.color !== b.color) { settings.ind[k] = { ...a, on: b.on, color: b.color }; applyIndicator(k); indChanged = true; }
+    }
+    if (indChanged) { renderChips(); updateLegend(); }
+    if (JSON.stringify(settings.drawings) === JSON.stringify(fresh.drawings)) return;
+    settings.drawings = fresh.drawings;
     silently(() => { for (const o of chart.getOverlays()) if (isDrawing(o) && o.currentStep === -1) chart.removeOverlay({ id: o.id }); });
     restoreDrawings();
     if (selectedId && !chart.getOverlays({ id: selectedId }).length) closeFloat();
@@ -472,7 +490,7 @@ function createView(kc, c, host, opts) {
     silently(() => { for (const o of chart.getOverlays()) if (isDrawing(o)) chart.removeOverlay({ id: o.id }); });
     settings.drawings = [];
     persist();
-    for (const v of views) if (v !== api && v.ticker === tkr) v.reloadDrawings();
+    for (const v of views) if (v !== api && v.ticker === tkr) v.reloadShared();
   }
 
   // ----- floating toolbar above the selected drawing -----
@@ -637,15 +655,15 @@ function createView(kc, c, host, opts) {
     renderTfBar();
 
     // Indicators dropdown
-    const indTrigger = el('button', { class: 'vlc-btn', attrs: { type: 'button', title: 'Indicators' } }, [el('span', { text: 'Indicators' }), icon('caret', 14)]);
+    const indTrigger = el('button', { class: 'vlc-btn', attrs: { type: 'button', title: 'Indicators' } }, [icon('indicators', 16), el('span', { class: 'vlc-lbl', text: 'Indicators' }), icon('caret', 14)]);
     const indMenu = makeMenu(indTrigger, {
       onOpen: (menu) => {
         menu.replaceChildren(el('div', { class: 'vlc-menu-head', text: 'Moving averages' }));
         for (const key of IND_KEYS) {
           const ind = settings.ind[key];
-          const cb = el('input', { attrs: { type: 'checkbox' }, on: { change: () => { ind.on = cb.checked; persist(); applyIndicator(key); renderChips(); updateLegend(); } } });
+          const cb = el('input', { attrs: { type: 'checkbox' }, on: { change: () => { ind.on = cb.checked; saveInd(); applyIndicator(key); renderChips(); updateLegend(); } } });
           cb.checked = ind.on;
-          const sw = colorInput(ind.color, (v) => { ind.color = v; persist(); applyIndicator(key); renderChips(); updateLegend(); }, `${ind.label} color`);
+          const sw = colorInput(ind.color, (v) => { ind.color = v; saveInd(); applyIndicator(key); renderChips(); updateLegend(); }, `${ind.label} color`);
           menu.append(el('label', { class: 'vlc-ind-row' }, [cb, el('span', { class: 'mono vlc-ind-name', text: ind.label }), sw]));
         }
       },
@@ -654,7 +672,7 @@ function createView(kc, c, host, opts) {
     const indWrap = el('div', { class: 'vlc-dd' }, [indTrigger, indMenu.menu]);
 
     // Compare
-    const cmpTrigger = el('button', { class: 'vlc-btn', attrs: { type: 'button', title: 'Compare with another ticker (shows % change)' } }, [el('span', { text: 'Compare' })]);
+    const cmpTrigger = el('button', { class: 'vlc-btn', attrs: { type: 'button', title: 'Compare with another ticker (shows % change)' } }, [icon('compare', 16), el('span', { class: 'vlc-lbl', text: 'Compare' })]);
     const cmpMenu = makeMenu(cmpTrigger, {
       onOpen: (menu) => {
         menu.replaceChildren();
@@ -711,19 +729,36 @@ function createView(kc, c, host, opts) {
     gearTrigger.addEventListener('click', gearMenu.toggle);
     const gearWrap = el('div', { class: 'vlc-dd' }, [gearTrigger, gearMenu.menu]);
 
-    // Right side: layout, open in new tab, full screen
-    const right = el('div', { class: 'vlc-top-right' });
-    if (opts.layout) {
-      const seg = el('div', { class: 'vlc-seg' });
-      for (const n of [1, 2]) seg.append(el('button', { class: `vlc-seg-btn${opts.layout.count === n ? ' active' : ''}`, attrs: { type: 'button', title: n === 1 ? 'One chart' : 'Two charts side by side', 'aria-label': n === 1 ? 'One chart' : 'Two charts' }, on: { click: () => opts.layout.onChange(n) } }, icon(n === 1 ? 'one' : 'two', 18)));
-      right.append(seg);
-    }
-    newTabLink = el('a', { class: 'vlc-ibtn', attrs: { href: `/chart/${encodeURIComponent(tkr)}`, target: '_blank', rel: 'noopener', title: 'Open in new tab', 'aria-label': 'Open in new tab' } }, icon('external', 18));
-    const fsBtn = iconBtn('fullscreen', 'Full screen', toggleFullscreen);
-    right.append(newTabLink, fsBtn);
-    hostEls.fsBtn = fsBtn;
+    // Fit all bars
+    const fitBtn = iconBtn('fit', 'Fit all: show every bar', () => fitAll(true));
 
-    top.append(tickerInput, dl, tfWrap, favWrap, el('span', { class: 'vlc-sep' }), indWrap, cmpWrap, gearWrap, el('span', { class: 'vlc-spacer' }), right);
+    // Right side. Page: layout, open in new tab, full screen. Card: open in Charts, expand / minimize in place.
+    const right = el('div', { class: 'vlc-top-right' });
+    if (card) {
+      const toCharts = el('a', { class: 'vlc-ibtn', attrs: { href: `/chart/${encodeURIComponent(tkr)}`, title: 'Open in Charts', 'aria-label': 'Open in Charts' } }, icon('charts', 18));
+      toCharts.addEventListener('click', (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return; e.preventDefault(); opts.onOpenInCharts?.(tkr); });
+      newTabLink = toCharts;
+      const expandBtn = el('button', { class: 'vlc-btn vlc-expand-btn', attrs: { type: 'button' }, on: { click: () => setExpanded(!expanded) } });
+      paintExpandBtn = () => {
+        expandBtn.replaceChildren(icon(expanded ? 'minimize' : 'expand', 16), el('span', { text: expanded ? 'Minimize' : 'Expand' }));
+        expandBtn.title = expanded ? 'Minimize (Esc)' : 'Expand this chart over the page';
+      };
+      paintExpandBtn();
+      right.append(toCharts, expandBtn);
+    } else {
+      if (opts.layout) {
+        const seg = el('div', { class: 'vlc-seg' });
+        for (const n of [1, 2]) seg.append(el('button', { class: `vlc-seg-btn${opts.layout.count === n ? ' active' : ''}`, attrs: { type: 'button', title: n === 1 ? 'One chart' : 'Two charts side by side', 'aria-label': n === 1 ? 'One chart' : 'Two charts' }, on: { click: () => opts.layout.onChange(n) } }, icon(n === 1 ? 'one' : 'two', 18)));
+        right.append(seg);
+      }
+      newTabLink = el('a', { class: 'vlc-ibtn', attrs: { href: `/chart/${encodeURIComponent(tkr)}`, target: '_blank', rel: 'noopener', title: 'Open in new tab', 'aria-label': 'Open in new tab' } }, icon('external', 18));
+      const fsBtn = iconBtn('fullscreen', 'Full screen', toggleFullscreen);
+      right.append(newTabLink, fsBtn);
+      hostEls.fsBtn = fsBtn;
+    }
+
+    // In the card the ticker is the company being viewed, so there is no ticker box
+    top.append(...(card ? [] : [tickerInput, dl]), tfWrap, favWrap, el('span', { class: 'vlc-sep' }), indWrap, cmpWrap, gearWrap, fitBtn, el('span', { class: 'vlc-spacer' }), right);
   }
 
   function setCandleColors() {
@@ -815,15 +850,15 @@ function createView(kc, c, host, opts) {
           refreshCompare();
         } catch (err) {
           callback([], false);
-          setMsg(NO_DATA_MESSAGE);
+          setMsg(failureMessage(err));
         }
       },
     });
     chart.setSymbol({ ticker: tkr, pricePrecision: 2, volumePrecision: 0 });
-    chart.setPeriod(PERIODS[compact ? 'D' : settings.tf]);
-    if (!compact) for (const key of IND_KEYS) applyIndicator(key);
+    chart.setPeriod(PERIODS[settings.tf]);
+    for (const key of IND_KEYS) applyIndicator(key);
     applyVolume();
-    if (compact) { chart.setZoomEnabled(false); chart.setScrollEnabled(false); } else restoreDrawings();
+    restoreDrawings();
 
     let lastBase = -1;
     chart.subscribeAction('onVisibleRangeChange', () => {
@@ -875,12 +910,12 @@ function createView(kc, c, host, opts) {
   document.addEventListener('fullscreenchange', onFsChange);
 
   const onKey = (e) => {
-    if (compact) return;
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
     if (e.key === 'Escape') {
       if (pendingId) cancelPending();
       else if (menus.some((m) => !m.menu.hidden)) closeMenus();
       else if (!floatBar.hidden) closeFloat();
+      else if (expanded) setExpanded(false);
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !typing && chart) {
       chart.removeOverlay({ id: selectedId });
@@ -890,25 +925,36 @@ function createView(kc, c, host, opts) {
   };
   document.addEventListener('keydown', onKey);
   // Another browser tab changed this ticker's drawings
-  const onStorage = (e) => { if (e.key === settingsKey(tkr)) reloadDrawings(); };
+  const onStorage = (e) => { if (e.key === settingsKey(tkr)) reloadShared(); };
   window.addEventListener('storage', onStorage);
 
-  // ----- compact extras -----
-  if (compact && opts.onExpand) {
-    stage.append(el('button', { class: 'vlc-expand', text: 'Expand', attrs: { type: 'button', title: 'Open the full chart' }, on: { click: () => opts.onExpand(tkr) } }));
+  // ----- expand in place (card mode): a full-viewport overlay over the current page, no navigation -----
+  function setExpanded(on) {
+    if (!card || on === expanded) return;
+    expanded = on;
+    root.classList.toggle('expanded', on);
+    document.body.classList.toggle('vlc-noscroll', on);
+    closeMenus();
+    paintExpandBtn?.();
+    setTimeout(() => { if (chart) chart.resize(); positionFloat(); }, 30);
   }
+  let paintExpandBtn = null;
 
   buildLegendLine();
   renderChips();
-  if (!compact) { buildTop(); buildLeft(); }
+  buildTop();
+  buildLeft();
   createChart();
 
   const api = {
     get ticker() { return tkr; },
-    reloadDrawings,
+    reloadShared,
+    setExpanded,
+    get expanded() { return expanded; },
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      if (expanded) document.body.classList.remove('vlc-noscroll');
       document.removeEventListener('fullscreenchange', onFsChange);
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onDocDown);

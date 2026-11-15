@@ -3,7 +3,8 @@
     "api/narrative.js": { "maxDuration": 300 },
     "api/news.js": { "maxDuration": 300 },
     "api/statements.js": { "maxDuration": 60 },
-    "api/filings.js": { "maxDuration": 60 }
+    "api/filings.js": { "maxDuration": 60 },
+    "api/prices.js": { "maxDuration": 30 }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },

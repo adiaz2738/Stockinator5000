@@ -12,7 +12,7 @@ export async function renderCharts(app, { ticker } = {}) {
   app.classList.add('vlc-fill');
 
   const layout = loadLayout();
-  const routeTicker = ticker && /^[A-Za-z][A-Za-z0-9.\-]{0,7}$/.test(ticker) ? ticker.toUpperCase() : null;
+  const routeTicker = ticker && /^[A-Za-z][A-Za-z0-9.\-]{0,9}$/.test(ticker) ? ticker.toUpperCase() : null;
   if (routeTicker) layout.tickers[0] = routeTicker;
   if (layout.tickers[1] === layout.tickers[0]) layout.tickers[1] = SAMPLE_TICKERS.find((t) => t !== layout.tickers[0]) || SAMPLE_TICKERS[0];
 
@@ -37,6 +37,7 @@ export async function renderCharts(app, { ticker } = {}) {
       const view = await mountChartView(hosts[i], {
         ticker: layout.tickers[i],
         mode: 'full',
+        location: `page-${i}`, // timeframe, volume and compare are saved per pane; drawings and indicators are shared per ticker
         // The layout toggle lives in the first chart's toolbar
         layout: i === 0 ? { count: layout.count, onChange: (n) => { if (n !== layout.count) { layout.count = n; saveLayout(layout); build(); } } } : null,
         onTickerChange: (t) => {

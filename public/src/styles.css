@@ -790,8 +790,6 @@ table.stmt-table tr.lvl-4 td:first-child { padding-left: 76px; }
 .vlc-chip-x:hover { color: var(--red); }
 .vlc-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; color: var(--text-2); pointer-events: none; z-index: 4; }
 .vlc-msg[hidden] { display: none; }
-.vlc-expand { position: absolute; top: 8px; right: 10px; z-index: 6; background: var(--surface); border: 1px solid var(--border-hi); color: var(--text-2); border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.vlc-expand:hover { color: var(--blue); }
 
 /* Floating toolbar above the selected drawing */
 .vlc-float { position: absolute; z-index: 40; max-width: calc(100% - 12px); }
@@ -804,15 +802,16 @@ table.stmt-table tr.lvl-4 td:first-child { padding-left: 76px; }
 .vlc-fmore-title { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
 .vlc-fmore-row { display: flex; gap: 14px; flex-wrap: wrap; }
 
-/* Compact read-only price chart (company view) */
-.vlc-view.compact { border-radius: 8px; overflow: hidden; }
-.vlc-view.compact .vlc-legend { right: 80px; }
-.vlc-view.compact .vlc-lg-sym { font-size: 13px; }
-
-/* Where the component is embedded in the Filings tab */
-.vlc-embed { height: calc(100vh - 210px); min-height: 520px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
-.vlc-compact-host { height: 240px; }
-.vlc-compact-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.vlc-compact-title .section-label { margin-bottom: 0; }
-
 .chart-empty-note { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 13px; color: var(--text-2); text-align: center; padding: 12px; }
+
+/* Price card on the company view: the full chart component at card size, expandable in place */
+.vlc-card-host { height: 520px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--card); }
+/* Card toolbars are icon-only until expanded */
+.vlc-view.cardmode:not(.expanded) .vlc-lbl { display: none; }
+.vlc-view.cardmode:not(.expanded) .vlc-btn { padding: 6px 7px; }
+.vlc-view.cardmode:not(.expanded) .vlc-top { padding: 4px 8px; }
+.vlc-expand-btn { color: var(--text); border-color: var(--border-hi); }
+.vlc-expand-btn:hover:not(:disabled) { color: var(--blue); }
+/* Expanded: a full-viewport overlay over the page; the page underneath keeps its place */
+.vlc-view.expanded { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 300; border: none; }
+body.vlc-noscroll { overflow: hidden; }
