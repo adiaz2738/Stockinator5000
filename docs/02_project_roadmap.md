@@ -191,6 +191,8 @@ Goal: make Stockinator the one place for research → decide → execute → mon
 
 **Library:** prototype **KLineChart** (Apache 2.0, drawing tools built in) first; fall back to TradingView **Lightweight Charts** (Apache 2.0, attribution required, but no built-in indicators or drawing tools) if KLineChart's editing doesn't feel right. TradingView's Advanced Charts library is not licensed for personal projects. Optional quick win: embed the free TradingView widget meanwhile (TradingView's data only; can't show our own overlays).
 
+**Prototype status:** a first KLineChart prototype is live on the Charts tab (static sample data in `public/sample/`, library vendored in `public/vendor/klinecharts/`, code in `public/src/charts.js` and `chart-overlays.js`). Drawings and settings are in localStorage for now; Neon persistence is a TODO in `charts.js`. The verdict on KLineChart vs Lightweight Charts comes from testing it.
+
 **Must have (everyday features):**
 - **Candlesticks only** (no line/bar/other chart types needed)
 - Zoom in/out and scroll; timeframes (intraday through weekly/monthly)

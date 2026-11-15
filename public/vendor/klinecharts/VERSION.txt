@@ -1,0 +1,3 @@
+KLineChart 10.1.0 (npm: klinecharts@10.1.0), UMD build dist/umd/klinecharts.min.js, vendored unmodified.
+License: Apache-2.0 (LICENSE). It bundles code from TradingView Lightweight Charts: see NOTICE and licenses/.
+Upgrade: npm pack klinecharts@<version>, copy dist/umd/klinecharts.min.js, LICENSE, NOTICE, licenses/.
