@@ -14,7 +14,8 @@ This is a research tool — no payments flow through it. It is initially single-
 
 - **Buffett-style value investing**: moat analysis, consistent earnings, low debt, high margins, DCF-based intrinsic value
 - **Learning as you build**: the app should make the math visible and educational, not just produce an answer
-- **Replaces**: Excel/Google Sheets for DCF calculations, Morningstar/Macrotrends for historical data, Finviz for screening (screening across companies is still ahead)
+- **Replaces**: Excel/Google Sheets for DCF calculations, Morningstar/Macrotrends for historical data, Finviz for screening (screening across companies is still ahead), and — planned — everyday charting in thinkorswim/TradingView
+- **All-in-one goal (added Nov 2026)**: minimize the number of sites, apps and tabs needed day to day. Research, charts, screening, portfolio, options and (eventually) order entry in one place, with only the everyday features actually used — no bloat
 - **Compounding investment**: building the tool reinforces what's being learned about investing
 - **Never fabricate a number**: if a figure can't be found in the source data, the app shows N/A. AI-written text is always labeled as AI-generated and separated into fact vs. interpretation
 
@@ -27,7 +28,10 @@ This is a research tool — no payments flow through it. It is initially single-
 - Existing design system: Financinator 5000 (dark navy/blue/green finance dashboard)
 - Stack familiarity: Claude Code, Neon (Postgres), Vercel, vanilla JS or lightweight frontend
 - Note-taking: Notion (primary), Obsidian (secondary)
-- Brokerage platforms (TD Ameritrade, Fidelity) handle live pricing — this app does not need to replicate that
+- Brokerages: **Schwab** (thinkorswim) will hold active stock picking, including a planned new **Roth IRA** there; **Fidelity** existing account; **Vanguard** Roth stays as-is and is not part of this app
+- Fidelity has no public trading API (read-only data sharing via aggregators only), so Fidelity holdings come in by CSV export. Schwab has a Trader API for individuals (positions, quotes, price history, option chains, orders), which is the planned integration
+- Does not day trade. Learning options (goal: identify underpriced options; cash-secured puts at or below the DCF buy-below price)
+- Market opens 6:30am Pacific — automation should remove the need to be at a screen at the open
 
 ---
 
@@ -112,7 +116,16 @@ News context for why a stock has been moving. It is kept visually and textually 
 
 **FMP free tier is now used only for ticker lookups** (company-name auto-fill in the calculator). Fundamentals no longer depend on it.
 
-**FMP paid (~$20/mo) is an optional later upgrade**, not a prerequisite. It would buy cleaner, normalized data and faster screening across many tickers. Alpha Vantage remains the wrong fit (thin fundamentals; better for price streaming, which this app doesn't need).
+**FMP paid (~$20/mo) is an optional later upgrade**, not a prerequisite, and is now **likely unnecessary**: the full-market screener can be built on EDGAR's `frames` API plus Schwab quotes (see "All-in-One Platform" below). Alpha Vantage remains the wrong fit.
+
+**Schwab Trader API (planned)** — Individual tier, for the account holder's own accounts. Covers all accounts under the Schwab login (the planned Roth IRA appears automatically). Provides:
+- Market data: quotes (batched), price history (daily and intraday candles), option chains and expirations, movers
+- Trader: accounts, positions, cost basis, orders (stocks, options, ETFs only), transactions
+- Streaming (WebSocket): level-one quotes, chart bars, Level 2 books (`NYSE_BOOK`, `NASDAQ_BOOK`, `OPTIONS_BOOK`), account activity. **No time & sales feed found** in the current Schwab streamer (the old TD Ameritrade `TIMESALE_*` services don't appear) — verify in the developer docs once approved
+- **Auth caveat:** OAuth refresh token expires after **7 days**, so the app needs a weekly re-authorize flow and must clearly show "Schwab disconnected" rather than failing silently
+- Streaming must connect from the **browser**, not Vercel (serverless functions can't hold a WebSocket open); the server only hands the browser a short-lived token
+
+**SEC EDGAR `frames` API (planned, for the screener)** — `data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/{period}.json` returns one line item for **every filer** for a period in one request. A handful of calls (revenue, cost of revenue, SG&A, operating income, interest, net income, debt, equity, EPS…) give a whole-market dataset for the Buffett rules, including the three Finviz can't filter. Free. SIC codes (for industry filters) come from the submissions API.
 
 ### Known EDGAR limitations
 
@@ -143,15 +156,97 @@ In this order:
 - **FCF/share from cover-page share counts** (the `dei` share count), to fill the gap for per-share-class companies like Visa
 - **Debt-to-equity on attributable equity** rather than total equity including non-controlling interests
 
-### 3. Screener across cached companies
+### 3. Screener (expanded: full market, not just cached companies)
 
-- Run the core and optional rules across every company already in `company_financials`
+- Run the core and optional rules across the **whole market** using EDGAR `frames` data (see Data Strategy), with current prices from Schwab quotes for P/E and similar. Companies already in `company_financials` keep their richer 10-year data
 - Filter panel with a toggle and threshold per rule; results table with the metric values and Pass/Fail per rule
-- Click any ticker to open it in Filings or send it to the calculator
+- **Industry/sector exclusion toggles** (a paywalled feature on Finviz). Biotech is a toggle, **off by default — never excluded automatically**. Based on SIC codes (e.g. biotech/pharma 2834, 2836, 8731), so other industries can be toggled the same way
+- Saved screens (name + rule set) so a screen can be re-run in one click
+- Click any ticker to open it in Filings, the chart, or send it to the calculator
 
 ### 4. Managed auth provider (only if multi-user happens)
 
 - Optional. The single-user login is enough for personal use; see "If This Is Ever Productized" below for what moving to a managed provider involves
+
+---
+
+## All-in-One Platform (planned, Nov 2026)
+
+Goal: make Stockinator the one place for research → decide → execute → monitor, replacing day-to-day use of thinkorswim, TradingView and Finviz. Only the features actually used; no bloat. Priority relative to "Next Up" above is still to be decided.
+
+### Prerequisites (do first — approval takes time)
+
+1. Open the Schwab Roth IRA
+2. Register at developer.schwab.com, request **Trader API – Individual**, wait for approval, then create an app (callback URL on stocks.financinator.online)
+3. Check the Roth's options approval level (cash-secured puts and covered calls are usually allowed in an IRA; no margin)
+
+### A. Schwab connection (read-only first)
+
+- OAuth connect flow, tokens stored server-side in Neon, weekly re-authorize prompt (7-day refresh token), visible connection status
+- Positions, balances and cost basis across all Schwab accounts
+- Quotes and price history for charts; option chains for later
+- No order placement in this step
+
+### B. Charts
+
+**Library:** prototype **KLineChart** (Apache 2.0, drawing tools built in) first; fall back to TradingView **Lightweight Charts** (Apache 2.0, attribution required, but no built-in indicators or drawing tools) if KLineChart's editing doesn't feel right. TradingView's Advanced Charts library is not licensed for personal projects. Optional quick win: embed the free TradingView widget meanwhile (TradingView's data only; can't show our own overlays).
+
+**Must have (everyday features):**
+- **Candlesticks only** (no line/bar/other chart types needed)
+- Zoom in/out and scroll; timeframes (intraday through weekly/monthly)
+- Indicators: **50 and 200 day EMA and SMA** (computed in-app). No MACD etc. needed
+- **Volume bars** at the bottom, customizable (color, opacity, height) so they look clean and stay out of the way
+- Drawing tools: trend lines, horizontal lines, vertical lines (important dates), parallel channels, Fibonacci retracement
+- Line editing: solid/dashed/dotted, color, width; **endpoints infinite or fixed on either or both ends**; text labels on lines; price labels; choose which data shows on a line (e.g. price, % change, number of days/bars spanned)
+- Drawings saved per ticker in Neon and restored on reload
+- **Multiple charts**, open a chart in a new tab (each chart has its own URL, e.g. `/chart/MSFT`), and full-screen view
+- **Compare tickers**: overlay other symbols as % change lines
+
+**Value overlays (things thinkorswim/TradingView can't show):**
+- DCF buy-below price line (from saved valuations)
+- Cost basis and positions (from Schwab)
+- Option strikes and expirations for held or candidate options
+- Earnings and 10-K filing date markers, linked to Filings/News
+- Later: implied volatility history pane
+
+### C. Screener
+
+See Next Up #3 (full market via EDGAR `frames`, industry toggles with biotech off by default).
+
+### D. Portfolio, watchlist and alerts
+
+- Portfolio view: Schwab positions (live) + Fidelity positions (CSV import), each compared to its saved DCF value and buy-below price
+- Watchlist with buy-below prices
+- Daily Vercel cron checks prices and emails an alert when something is near or below its buy-below price
+
+### E. Morning digest / Wednesday brief
+
+- ~6am Pacific email: positions, overnight fills, anything near a trigger, News tab highlights
+- Wednesday pre-study brief: watchlist vs. buy-below, a screener run, 1–2 things worth looking at
+
+### F. Options chain view (after options study Sections 3–5)
+
+- Filtered to the strategy: cash-secured puts with strikes at or below the DCF buy-below price, ~30–45 days out, minimum open interest, maximum bid-ask spread
+- Shows annualized return on cash secured, and flags any option that expires after an earnings date
+
+### G. Order entry (levels of automation)
+
+| Level | What | Status |
+|---|---|---|
+| 0 | Alerts only | Part of D |
+| 1 | **Pre-filled order ticket** — app builds the order, user reviews and clicks Send | Planned |
+| 2 | **Broker-side orders**: GTC limit entries plus OCO brackets (e.g. close a short put at 50% of max profit) held at Schwab, so they execute without a device or the app being up | Planned |
+| 3 | Fully automated bot | Later, only with guardrails: dry-run mode first, max position size, daily loss limit, kill switch |
+
+Practice in thinkorswim paperMoney or with small positions before relying on Levels 1–2.
+
+### H. Trade journal
+
+- Fills pulled automatically from Schwab transactions; add thesis/notes per trade; review later
+
+### Deferred
+
+- **Level 2 and time & sales** — dropped for now. Schwab streams Level 2 books but appears to have no time & sales feed, and Level 2 alone isn't worth the WebSocket work yet
 
 ---
 
@@ -321,8 +416,10 @@ CREATE INDEX idx_login_attempts_ip ON login_attempts(ip, attempted_at);
 | AI | Anthropic API (Messages) | Default model `claude-sonnet-5-5`, overridable via `ANTHROPIC_MODEL`; prompt caching on the shared filing text |
 | Ticker lookup | FMP free tier | Company-name auto-fill only. Paid tier is an optional later upgrade |
 | Design system | Financinator 5000 tokens | Exact hex values, same fonts |
+| Brokerage/market data (planned) | Schwab Trader API – Individual | OAuth, 7-day refresh token; streaming from the browser only |
+| Charts (planned) | KLineChart (prototype) or TradingView Lightweight Charts | Both Apache 2.0 |
 
-Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), `DAILY_NEWS_LIMIT` (default 10), and `COOKIE_DOMAIN` (unset = host-only cookie).
+Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), `DAILY_NEWS_LIMIT` (default 10), and `COOKIE_DOMAIN` (unset = host-only cookie). Planned for Schwab: `SCHWAB_APP_KEY`, `SCHWAB_APP_SECRET`, `SCHWAB_CALLBACK_URL`.
 
 ---
 
@@ -343,8 +440,10 @@ Next (see Next Up above):
 
 7. In-app AI chat (with a message cap)
 8. Metric refinements
-9. Screener across cached companies
+9. Screener (full market, industry toggles)
 10. Managed auth provider, only if multi-user happens
+
+All-in-One Platform (order vs. the list above to be decided): prerequisites (Schwab Roth + developer approval) → A. Schwab connection → B. Charts → C. Screener → D. Portfolio and alerts → E. Morning digest → F. Options chain view → G. Order ticket and broker-side brackets → H. Journal. Level 2 / time & sales deferred.
 
 ---
 
@@ -360,7 +459,7 @@ The app and the study plan should compound: studying a company → loading it in
 
 ## What This Does NOT Do
 
-- Live stock price streaming (user has TD Ameritrade and Fidelity for that)
 - Handle payment information of any kind
-- Replace brokerage platforms
-- Auto-trade or make buy/sell decisions — the AI Story is explicitly instructed to give no buy/sell recommendation, and every Story carries an "AI-generated from SEC filings. Verify against the filing. Not financial advice." disclaimer
+- Hold money or replace the broker's own confirmations: orders always go through Schwab, and Fidelity is read-only (CSV)
+- Level 2 / time & sales (deferred, see All-in-One Platform)
+- Make buy/sell decisions or trade fully automatically — order entry is human-confirmed (Level 1) or pre-placed broker-side orders (Level 2); a fully automated bot is not planned without guardrails. The AI Story is explicitly instructed to give no buy/sell recommendation, and every Story carries an "AI-generated from SEC filings. Verify against the filing. Not financial advice." disclaimer
