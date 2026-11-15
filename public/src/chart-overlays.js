@@ -2,7 +2,9 @@
 // KLineChart's built-in line tools cannot extend each end independently, show a text label or choose what a line
 // shows, so the five tools are registered here as custom overlays whose look is driven by overlay.extendData.
 
+// Overlay types (what is stored with a saved drawing). steps = clicks + 1.
 export const TOOLS = [
+  { name: 'vlText', label: 'Text', short: 'Text', steps: 2 },
   { name: 'vlTrend', label: 'Trend line', short: 'Trend', steps: 3 },
   { name: 'vlHLine', label: 'Horizontal line', short: 'H-line', steps: 3 },
   { name: 'vlVLine', label: 'Vertical line', short: 'V-line', steps: 3 },
@@ -10,9 +12,26 @@ export const TOOLS = [
   { name: 'vlFib', label: 'Fib retracement', short: 'Fib', steps: 3 },
 ];
 
+// Toolbar tools. Several tools are presets of one overlay type (a ray is a trend line extended to the right, and so on),
+// so every drawing stays editable. preset overrides the overlay's defaults; extendLeft/extendRight are screen sides.
+export const TOOL_GROUPS = [
+  { id: 'lines', label: 'Lines', tools: [
+    { id: 'trend', overlay: 'vlTrend', label: 'Trend line', preset: {} },
+    { id: 'ray', overlay: 'vlTrend', label: 'Ray', preset: { extendRight: true } },
+    { id: 'extended', overlay: 'vlTrend', label: 'Extended line', preset: { extendLeft: true, extendRight: true } },
+    { id: 'hline', overlay: 'vlHLine', label: 'Horizontal line', preset: {} },
+    { id: 'hray', overlay: 'vlHLine', label: 'Horizontal ray', preset: { extendLeft: false, extendRight: true } },
+    { id: 'vline', overlay: 'vlVLine', label: 'Vertical line', preset: {} },
+  ] },
+  { id: 'channels', label: 'Channels', tools: [{ id: 'channel', overlay: 'vlChannel', label: 'Parallel channel', preset: {} }] },
+  { id: 'fib', label: 'Fib', tools: [{ id: 'fib', overlay: 'vlFib', label: 'Fib retracement', preset: {} }] },
+  { id: 'text', label: 'Text', tools: [{ id: 'text', overlay: 'vlText', label: 'Text label', preset: {} }] },
+];
+
 // Default look/behavior per tool. extendLeft/extendRight: for the vertical line they mean the top/bottom end.
 export function defaultStyle(name, colors) {
   const base = { dash: 'solid', color: colors.blue, width: 1.5, extendLeft: false, extendRight: false, label: '', priceTag: true, show: { price: false, pct: false, bars: false, days: false } };
+  if (name === 'vlText') return { ...base, color: colors.text, width: 1.5, label: 'Text', priceTag: false };
   if (name === 'vlHLine') return { ...base, color: colors.yellow, extendLeft: true, extendRight: true, show: { ...base.show, price: true } };
   if (name === 'vlVLine') return { ...base, color: colors.text2, dash: 'dashed', extendLeft: true, extendRight: true, priceTag: false };
   if (name === 'vlFib') return { ...base, color: colors.yellow, width: 1, extendRight: true };
@@ -103,7 +122,7 @@ export function registerAll(kc, colors) {
         const ex = indicator.extendData || {};
         const cur = data.current;
         let c = ex.color;
-        if (ex.mode !== 'single') c = cur && cur.close >= cur.open ? colors.green : colors.red;
+        if (ex.mode !== 'single') c = cur && cur.close >= cur.open ? (ex.up || colors.green) : (ex.down || colors.red);
         return { color: hexToRgba(c, ex.opacity ?? 0.35) };
       },
     }],
@@ -205,6 +224,13 @@ export function registerAll(kc, colors) {
     }
     return figs;
   };
+
+  // Single-click text label. The text is extendData.label; the line width setting doubles as the font size step.
+  kc.registerOverlay(common('vlText', 2, ({ overlay, coordinates }) => {
+    if (!coordinates.length) return [];
+    const s = style(overlay);
+    return [{ key: 'text', type: 'text', attrs: { x: coordinates[0].x, y: coordinates[0].y, text: s.label || 'Text', align: 'left', baseline: 'middle' }, styles: textStyles(s, { family: "'Inter', sans-serif", size: Math.round(10 + s.width * 2), weight: 600, paddingLeft: 6, paddingRight: 6, paddingTop: 3, paddingBottom: 3 }) }];
+  }));
 
   kc.registerOverlay(common('vlTrend', 3, ({ chart, overlay, coordinates, bounding }) => {
     if (coordinates.length < 2) return [];

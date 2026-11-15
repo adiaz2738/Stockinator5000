@@ -13,6 +13,9 @@
   --red:              #ff4d6a;
   --red-dim:          rgba(255,77,106,0.12);
   --yellow:           #ffc940;
+  --compare-1:        #ff9f43;
+  --compare-2:        #b48cff;
+  --compare-3:        #5ad1e6;
   --text:             #e8edf5;
   --text-2:           #8a96a8;
   --text-3:           #4a5568;
@@ -692,61 +695,124 @@ table.stmt-table tr.lvl-4 td:first-child { padding-left: 76px; }
 
 /* ---------- Charts (prototype) ---------- */
 .proto-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: rgba(255,201,64,0.12); color: var(--yellow); vertical-align: middle; }
-.charts-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
-.charts-head .section-label { margin-bottom: 0; }
-.charts-title { display: flex; align-items: center; gap: 4px; }
-.chart-note { font-size: 12px; color: var(--text-2); margin: 0; }
-.ch-spacer { flex: 1; }
-.vlc-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+
+/* The Charts page fills the viewport below the 56px nav */
+#app.vlc-fill { max-width: none; margin: 0; padding: 0; height: calc(100vh - 56px); height: calc(100dvh - 56px); }
+.vlc-grid { display: grid; height: 100%; gap: 1px; background: var(--border); grid-template-columns: minmax(0, 1fr); }
 .vlc-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (max-width: 900px) { .vlc-grid.cols-2 { grid-template-columns: 1fr; } }
-.vlc-card { padding: 12px; display: flex; flex-direction: column; gap: 10px; position: relative; }
-.chart-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.chart-stage { position: relative; flex: 1; min-height: 0; }
-.chart-canvas { width: 100%; height: 520px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); overflow: hidden; }
-.chart-canvas.compact { height: 440px; }
-.vlc-card:fullscreen { background: var(--card); padding: 16px; border-radius: 0; }
-.vlc-card:fullscreen .chart-canvas, .vlc-card:fullscreen .chart-canvas.compact { height: calc(100vh - 130px); }
-.chart-status { position: absolute; top: 10px; left: 12px; font-size: 12px; color: var(--text-2); pointer-events: none; }
-.chart-status[hidden] { display: none; }
-.ch-select { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 13px; font-family: var(--sans); outline: none; }
-.ch-select.mono { font-family: var(--mono); }
-.ch-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-glow); }
-.ch-btn { padding: 7px 12px; font-size: 12px; text-decoration: none; margin-top: 0; display: inline-block; }
-.seg { display: inline-flex; border: 1px solid var(--border-hi); border-radius: 6px; overflow: hidden; }
-.seg-btn { background: transparent; border: none; color: var(--text-2); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.seg-btn + .seg-btn { border-left: 1px solid var(--border-hi); }
-.seg-btn.active { background: var(--blue-glow); color: var(--blue); }
-.seg-btn.mono { font-family: var(--mono); }
-.tool-group, .ind-group, .cmp-wrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ch-tool { background: transparent; border: 1px solid var(--border-hi); color: var(--text-2); border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 500; cursor: pointer; }
-.ch-tool:hover { color: var(--blue); }
-.ch-tool.active { background: var(--blue-glow); color: var(--blue); border-color: var(--blue-dim); }
-.ch-tool.ghost { border-color: transparent; }
-.ind-item { display: inline-flex; align-items: center; gap: 2px; }
-.ind-chip, .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-hi); border-radius: 999px; padding: 4px 10px; font-size: 11px; color: var(--text-2); background: transparent; cursor: pointer; }
-.chip { cursor: default; }
-.ind-chip.on { color: var(--text); border-color: var(--chip); }
-.chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip); opacity: 0.35; }
-.ind-chip.on .chip-dot, .chip .chip-dot { opacity: 1; }
-.chip-x { background: none; border: none; color: var(--text-2); cursor: pointer; padding: 0 0 0 2px; font-size: 14px; line-height: 1; }
-.chip-x:hover { color: var(--red); }
-.chip-color, .lp-color { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border-hi); border-radius: 50%; background: none; cursor: pointer; }
-.lp-color { border-radius: 6px; width: 34px; }
-.vol-wrap { position: relative; }
-.vol-pop, .line-panel { background: var(--surface); border: 1px solid var(--border-hi); border-radius: 10px; padding: 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.5); z-index: 20; }
-.vol-pop { position: absolute; right: 0; top: calc(100% + 6px); width: 280px; display: flex; flex-direction: column; gap: 10px; }
-.vol-pop[hidden], .line-panel[hidden] { display: none; }
-.line-panel { position: absolute; top: 10px; right: 10px; width: 300px; display: flex; flex-direction: column; gap: 10px; }
-.lp-head { display: flex; align-items: center; justify-content: space-between; }
-.lp-title { font-size: 12px; font-weight: 600; color: var(--text); }
-.lp-x { background: none; border: none; color: var(--text-2); font-size: 18px; line-height: 1; cursor: pointer; }
-.lp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.lp-label { width: 48px; font-size: 11px; color: var(--text-2); }
-.lp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
-.lp-select, .lp-text { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: var(--text); font-size: 12px; outline: none; }
-.lp-text { flex: 1; min-width: 0; }
-.lp-select.mono, .lp-val { font-family: var(--mono); }
-.lp-val { font-size: 11px; color: var(--text-2); min-width: 42px; text-align: right; }
-.lp-del { margin-top: 0; padding: 7px 12px; font-size: 12px; color: var(--red); border-color: var(--red-dim); }
-.lp-del:not(:disabled):hover { color: var(--red); border-color: var(--red); }
+@media (max-width: 900px) { .vlc-grid.cols-2 { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); } }
+.vlc-slot { min-width: 0; min-height: 0; background: var(--card); }
+.vlc-loading { padding: 24px; font-size: 13px; color: var(--text-2); }
+
+.vlc-view { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--card); position: relative; color: var(--text); }
+.vlc-view:fullscreen { width: 100vw; height: 100vh; }
+.vlc-top { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; row-gap: 4px; position: relative; z-index: 30; }
+.vlc-spacer { flex: 1; }
+.vlc-sep { width: 1px; height: 20px; background: var(--border-hi); margin: 0 4px; }
+.vlc-top-right { display: flex; align-items: center; gap: 4px; }
+.vlc-favs { display: flex; gap: 2px; }
+.vlc-ticker { width: 84px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text); font-size: 13px; font-weight: 500; text-transform: uppercase; outline: none; }
+.vlc-ticker:focus, .vlc-text:focus, .vlc-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-glow); }
+.vlc-btn { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 1px solid transparent; color: var(--text-2); border-radius: 6px; padding: 6px 10px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.vlc-btn:hover:not(:disabled) { background: var(--card); color: var(--text); }
+.vlc-btn.active { background: var(--blue-glow); color: var(--blue); }
+.vlc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.vlc-quick { padding: 6px 8px; min-width: 30px; justify-content: center; }
+.vlc-ibtn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; background: transparent; border: 1px solid transparent; color: var(--text-2); border-radius: 6px; cursor: pointer; padding: 0; text-decoration: none; }
+.vlc-ibtn:hover { background: var(--card); color: var(--text); }
+.vlc-ibtn.active { background: var(--blue-glow); color: var(--blue); }
+.vlc-ibtn.danger:hover { color: var(--red); background: var(--red-dim); }
+.vlc-seg { display: inline-flex; border: 1px solid var(--border-hi); border-radius: 6px; overflow: hidden; }
+.vlc-seg-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 28px; background: transparent; border: none; color: var(--text-2); cursor: pointer; padding: 0 6px; }
+.vlc-seg-btn + .vlc-seg-btn { border-left: 1px solid var(--border-hi); }
+.vlc-seg-btn.active { background: var(--blue-glow); color: var(--blue); }
+.vlc-dd { position: relative; }
+.vlc-dim { color: var(--text-2); }
+.vlc-hint { margin-left: auto; font-size: 10px; color: var(--yellow); }
+.vlc-hint-line { min-height: 16px; font-size: 12px; color: var(--yellow); }
+.vlc-val { font-size: 11px; color: var(--text-2); min-width: 40px; text-align: right; }
+.vlc-color { width: 26px; height: 22px; padding: 0; border: 1px solid var(--border-hi); border-radius: 6px; background: none; cursor: pointer; }
+.vlc-select, .vlc-text { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: var(--text); font-size: 12px; outline: none; height: 28px; }
+.vlc-text { width: 110px; font-family: var(--sans); }
+.vlc-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+
+/* Dropdowns, flyouts, popovers */
+.vlc-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 220px; background: var(--surface); border: 1px solid var(--border-hi); border-radius: 10px; padding: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.55); display: flex; flex-direction: column; gap: 6px; }
+.vlc-menu[hidden] { display: none; }
+.vlc-menu.side-right { top: 0; left: calc(100% + 6px); min-width: 190px; }
+.vlc-menu.gear-menu { min-width: 280px; }
+.vlc-menu.tf-menu { min-width: 230px; max-height: 70vh; overflow-y: auto; }
+.vlc-menu-head { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); padding: 4px 6px 0; }
+.vlc-row { display: flex; align-items: center; gap: 10px; }
+.vlc-row-label { width: 58px; font-size: 11px; color: var(--text-2); }
+.vlc-tf-row { display: flex; align-items: center; gap: 2px; }
+.vlc-tf-item { flex: 1; display: flex; align-items: center; gap: 8px; background: transparent; border: none; color: var(--text); font-size: 13px; padding: 6px 8px; border-radius: 6px; cursor: pointer; text-align: left; }
+.vlc-tf-item:hover:not(:disabled) { background: var(--card); }
+.vlc-tf-item.active { color: var(--blue); background: var(--blue-glow); }
+.vlc-tf-item:disabled { color: var(--text-3); cursor: not-allowed; }
+.vlc-star { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--text-3); cursor: pointer; border-radius: 6px; }
+.vlc-star:hover { background: var(--card); color: var(--text-2); }
+.vlc-star.on { color: var(--yellow); }
+.vlc-star.on svg { fill: currentColor; }
+.vlc-ind-row { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.vlc-ind-row:hover { background: var(--card); }
+.vlc-ind-name { flex: 1; }
+
+/* Left drawing toolbar */
+.vlc-body { flex: 1; display: flex; min-height: 0; }
+.vlc-left { width: 52px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; background: var(--surface); border-right: 1px solid var(--border); position: relative; z-index: 25; }
+.vlc-vspacer { flex: 1; }
+.vlc-tool-group { position: relative; display: flex; align-items: center; }
+.vlc-tool { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; border-radius: 8px; color: var(--text-2); cursor: pointer; padding: 0; }
+.vlc-tool:hover { background: var(--card); color: var(--text); }
+.vlc-tool.active { background: var(--blue-glow); color: var(--blue); border-color: var(--blue-dim); }
+.vlc-tool.danger:hover { color: var(--red); background: var(--red-dim); }
+.vlc-flyout-btn { width: 11px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--text-3); cursor: pointer; padding: 0; margin-left: -2px; border-radius: 4px; }
+.vlc-flyout-btn:hover { color: var(--text); background: var(--card); }
+.vlc-fly-item { display: flex; align-items: center; gap: 10px; background: transparent; border: none; color: var(--text); font-size: 13px; padding: 7px 8px; border-radius: 6px; cursor: pointer; text-align: left; }
+.vlc-fly-item:hover { background: var(--card); }
+.vlc-fly-item.active { color: var(--blue); }
+
+/* Chart stage, legend, messages */
+.vlc-stage { flex: 1; position: relative; min-width: 0; min-height: 0; }
+.vlc-canvas { position: absolute; inset: 0; }
+.vlc-legend { position: absolute; top: 8px; left: 10px; right: 90px; z-index: 5; pointer-events: none; display: flex; flex-direction: column; gap: 4px; }
+.vlc-lg-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 12px; }
+.vlc-lg-sym { font-size: 14px; font-weight: 500; color: var(--text); }
+.vlc-lg-tf { color: var(--text-2); font-size: 12px; }
+.vlc-lg-pair { display: inline-flex; gap: 4px; font-size: 12px; }
+.vlc-lg-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.vlc-chip { pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 999px; font-size: 11px; color: var(--text); background: rgba(13,18,25,0.82); border: 1px solid var(--border-hi); }
+.vlc-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip); }
+.vlc-chip-val { color: var(--text-2); }
+.vlc-chip-val.vlc-need { color: var(--yellow); }
+.vlc-chip-x { background: none; border: none; color: var(--text-2); font-size: 14px; line-height: 1; cursor: pointer; padding: 0 4px; border-radius: 999px; }
+.vlc-chip-x:hover { color: var(--red); }
+.vlc-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; color: var(--text-2); pointer-events: none; z-index: 4; }
+.vlc-msg[hidden] { display: none; }
+.vlc-expand { position: absolute; top: 8px; right: 10px; z-index: 6; background: var(--surface); border: 1px solid var(--border-hi); color: var(--text-2); border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.vlc-expand:hover { color: var(--blue); }
+
+/* Floating toolbar above the selected drawing */
+.vlc-float { position: absolute; z-index: 40; max-width: calc(100% - 12px); }
+.vlc-float[hidden] { display: none; }
+.vlc-fbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border-hi); border-radius: 10px; padding: 5px 8px; box-shadow: 0 8px 26px rgba(0,0,0,0.55); }
+.vlc-fgroup { display: flex; align-items: center; gap: 4px; }
+.vlc-fgroup + .vlc-fgroup { border-left: 1px solid var(--border); padding-left: 6px; }
+.vlc-fmore { margin-top: 6px; background: var(--surface); border: 1px solid var(--border-hi); border-radius: 10px; padding: 10px; box-shadow: 0 8px 26px rgba(0,0,0,0.55); display: flex; flex-direction: column; gap: 8px; }
+.vlc-fmore[hidden] { display: none; }
+.vlc-fmore-title { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+.vlc-fmore-row { display: flex; gap: 14px; flex-wrap: wrap; }
+
+/* Compact read-only price chart (company view) */
+.vlc-view.compact { border-radius: 8px; overflow: hidden; }
+.vlc-view.compact .vlc-legend { right: 80px; }
+.vlc-view.compact .vlc-lg-sym { font-size: 13px; }
+
+/* Where the component is embedded in the Filings tab */
+.vlc-embed { height: calc(100vh - 210px); min-height: 520px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
+.vlc-compact-host { height: 240px; }
+.vlc-compact-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.vlc-compact-title .section-label { margin-bottom: 0; }
+
+.chart-empty-note { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 13px; color: var(--text-2); text-align: center; padding: 12px; }

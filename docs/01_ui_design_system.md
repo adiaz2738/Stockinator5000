@@ -31,6 +31,9 @@ Carry over the exact Financinator 5000 tokens — no reinterpretation.
   --red:              #ff4d6a;
   --red-dim:          rgba(255,77,106,0.12);
   --yellow:           #ffc940;
+  --compare-1:        #ff9f43;
+  --compare-2:        #b48cff;
+  --compare-3:        #5ad1e6;
   --text:             #e8edf5;
   --text-2:           #8a96a8;
   --text-3:           #4a5568;
@@ -38,6 +41,8 @@ Carry over the exact Financinator 5000 tokens — no reinterpretation.
   --sans:             'Inter', sans-serif;
 }
 ```
+
+**Chart series tokens:** `--compare-1`, `--compare-2`, `--compare-3` (orange, violet, cyan) are the colors for compare-ticker lines on the Charts page, assigned in order. They carry no semantic meaning, so they never collide with green/red (price direction) or blue/yellow (valuation / margin of safety).
 
 **Semantic pairing for this tool:**
 - Blue (`--blue`) = Valuation / calculated figures / intrinsic value

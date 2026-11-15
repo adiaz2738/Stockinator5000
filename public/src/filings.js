@@ -1,6 +1,8 @@
 import { renderStoryPane } from './story.js';
 import { renderNewsPane } from './news.js';
 import { renderStatementsPane, secLink, fmtFilingDate } from './statements.js';
+import { mountChartView } from './chart-view.js';
+import { hasSampleData, NO_DATA_MESSAGE } from './chart-data.js';
 
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 const REVERSE_PREFILL_KEY = 'reversePrefill';
@@ -468,7 +470,7 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
 
 // ---------- Page ----------
 
-export function renderFilings(container, { onSendToCalculator, onSendToReverse }) {
+export function renderFilings(container, { onSendToCalculator, onSendToReverse, onExpandChart }) {
   container.replaceChildren();
 
   const input = el('input', { attrs: { id: 'filings-q', type: 'text', autocomplete: 'off', placeholder: 'Ticker (e.g. V) or EDGAR URL', maxlength: '500', 'aria-label': 'Ticker or EDGAR URL' } });
@@ -487,8 +489,55 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse }
   const subStatements = el('button', { class: 'sub-tab', text: 'Statements', attrs: { type: 'button' } });
   const subStory = el('button', { class: 'sub-tab', text: 'Story', attrs: { type: 'button' } });
   const subNews = el('button', { class: 'sub-tab sub-tab-news', text: 'News', attrs: { type: 'button' } });
-  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStatements, subStory, subNews]);
-  container.append(searchCard, subTabs, results, statementsPane, storyPane, newsPane);
+  const chartPane = el('div', { class: 'filings-results' });
+  const subChart = el('button', { class: 'sub-tab', text: 'Chart', attrs: { type: 'button' } });
+  const subTabs = el('div', { class: 'sub-tabs' }, [subMetrics, subStatements, subStory, subNews, subChart]);
+  container.append(searchCard, subTabs, results, statementsPane, storyPane, newsPane, chartPane);
+
+  // The two chart components (the full Chart sub-tab and the compact one on the company view) share chart-view.js
+  let fullChart = null;
+  let compactChart = null;
+  const disposeFull = () => { fullChart?.destroy?.(); fullChart = null; };
+  const disposeCompact = () => { compactChart?.destroy?.(); compactChart = null; };
+
+  async function renderChartPane() {
+    disposeFull();
+    chartPane.replaceChildren();
+    const data = await ensureData();
+    if (activeSubTab !== 'chart') return;
+    const ticker = String(data?.ticker || '').toUpperCase();
+    if (!data) { chartPane.replaceChildren(el('div', { class: 'card empty-state', text: 'Load a company first to see its chart.' })); return; }
+    if (!ticker) { chartPane.replaceChildren(el('div', { class: 'card empty-state', text: NO_DATA_MESSAGE })); return; }
+    const host = el('div', { class: 'vlc-embed' });
+    chartPane.replaceChildren(host);
+    const view = await mountChartView(host, { ticker, mode: 'full' });
+    if (activeSubTab !== 'chart' || !host.isConnected) { view.destroy?.(); return; }
+    fullChart = view;
+  }
+
+  // Compact price chart (candles + volume, read-only) at the top of the company view
+  function compactChartCard(data) {
+    disposeCompact();
+    const ticker = String(data.ticker || '').toUpperCase();
+    const host = el('div', { class: 'vlc-compact-host' });
+    const expand = el('button', { class: 'btn btn-ghost btn-inline', text: 'Expand', attrs: { type: 'button', title: 'Open the full chart', hidden: '' } });
+    expand.addEventListener('click', () => onExpandChart?.(ticker));
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'vlc-compact-title' }, [el('div', { class: 'section-label', text: 'Price' }), expand]),
+      host,
+    ]);
+    if (!ticker) { host.replaceChildren(el('div', { class: 'chart-empty-note', text: NO_DATA_MESSAGE })); return card; }
+    hasSampleData(ticker).then(async (ok) => {
+      if (!host.isConnected && !card.isConnected) return;
+      if (!ok) { host.replaceChildren(el('div', { class: 'chart-empty-note', text: NO_DATA_MESSAGE })); return; }
+      expand.hidden = false;
+      const view = await mountChartView(host, { ticker, mode: 'compact', fitBars: 252 });
+      if (!card.isConnected) { view.destroy?.(); return; }
+      disposeCompact();
+      compactChart = view;
+    });
+    return card;
+  }
 
   function showSubTab(name) {
     activeSubTab = name;
@@ -496,21 +545,26 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse }
     subStatements.classList.toggle('active', name === 'statements');
     subStory.classList.toggle('active', name === 'story');
     subNews.classList.toggle('active', name === 'news');
+    subChart.classList.toggle('active', name === 'chart');
     results.hidden = name !== 'metrics';
     statementsPane.hidden = name !== 'statements';
     storyPane.hidden = name !== 'story';
     newsPane.hidden = name !== 'news';
+    chartPane.hidden = name !== 'chart';
+    if (name !== 'chart') disposeFull();
     // A hidden pane can't hold a scroll position, so make sure the latest year is in view when it reappears
     if (name === 'metrics') resetTableScroll(results);
     const paneArgs = { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null };
     if (name === 'statements') renderStatementsPane(statementsPane, paneArgs);
     if (name === 'story') renderStoryPane(storyPane, paneArgs);
     if (name === 'news') renderNewsPane(newsPane, paneArgs);
+    if (name === 'chart') renderChartPane();
   }
   subMetrics.addEventListener('click', () => showSubTab('metrics'));
   subStatements.addEventListener('click', () => showSubTab('statements'));
   subStory.addEventListener('click', () => showSubTab('story'));
   subNews.addEventListener('click', () => showSubTab('news'));
+  subChart.addEventListener('click', () => showSubTab('chart'));
 
   // Metrics for whatever is in the search box, loading them first when they aren't loaded yet
   async function ensureData() {
@@ -523,6 +577,7 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse }
   let requestSeq = 0;
 
   function showMessage(text, isError) {
+    disposeCompact();
     results.replaceChildren(el('div', { class: `card empty-state${isError ? ' error-state' : ''}`, text }));
   }
 
@@ -583,6 +638,7 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse }
           onSendToCalculator();
         },
       }),
+      compactChartCard(data),
       scorecardCard(data.metrics),
       tableCard(data.metrics),
       chartsGrid(data.metrics),
@@ -608,6 +664,7 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse }
       lastLoaded = { q, data: body };
       showData(body);
       if (activeSubTab === 'statements') renderStatementsPane(statementsPane, { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null });
+      if (activeSubTab === 'chart') renderChartPane();
       return body;
     } catch (err) {
       console.error(err);

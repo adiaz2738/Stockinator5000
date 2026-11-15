@@ -72,7 +72,7 @@ function render(prefill) {
   } else if (route === '/reverse') {
     renderReverse(app);
   } else if (route === '/filings') {
-    renderFilings(app, { onSendToCalculator: () => navigate('/calculator'), onSendToReverse: () => navigate('/reverse') });
+    renderFilings(app, { onSendToCalculator: () => navigate('/calculator'), onSendToReverse: () => navigate('/reverse'), onExpandChart: (t) => navigate(`/chart/${encodeURIComponent(t)}`) });
   } else {
     const fromFilings = prefill ? null : takeFilingsPrefill();
     if (fromFilings) {

@@ -191,7 +191,7 @@ Goal: make Stockinator the one place for research → decide → execute → mon
 
 **Library:** prototype **KLineChart** (Apache 2.0, drawing tools built in) first; fall back to TradingView **Lightweight Charts** (Apache 2.0, attribution required, but no built-in indicators or drawing tools) if KLineChart's editing doesn't feel right. TradingView's Advanced Charts library is not licensed for personal projects. Optional quick win: embed the free TradingView widget meanwhile (TradingView's data only; can't show our own overlays).
 
-**Prototype status:** a first KLineChart prototype is live on the Charts tab (static sample data in `public/sample/`, library vendored in `public/vendor/klinecharts/`, code in `public/src/charts.js` and `chart-overlays.js`). Drawings and settings are in localStorage for now; Neon persistence is a TODO in `charts.js`. The verdict on KLineChart vs Lightweight Charts comes from testing it.
+**Prototype status:** a KLineChart prototype is live: a full-viewport Charts tab (`/charts`, `/chart/TICKER`) plus a "Chart" sub-tab and a compact read-only price chart on the Filings company view. All three use one component (`public/src/chart-view.js`; page shell `charts.js`, data and settings `chart-data.js`, drawing tools and indicators `chart-overlays.js`). Static real sample data in `public/sample/` (about 20 years of daily bars for AAPL, MSFT, V; FMP free tier caps a request at 5,000 rows); library vendored in `public/vendor/klinecharts/`. Drawings and settings are in localStorage and shared per ticker across charts; Neon persistence is a TODO in `chart-data.js`. Tickers without sample data show "Chart data available once Schwab is connected."
 
 **Must have (everyday features):**
 - **Candlesticks only** (no line/bar/other chart types needed)
@@ -289,6 +289,7 @@ Not planned, but if the app is ever sold or opened to other users:
 
 ## Later / Optional
 
+- **Charts: fix Fib label overlap at dense zoom** (level labels collide with each other and with the lines when the retracement is small on screen)
 - **User-written moat notes** per company, saved to the DB (the Story tab's moat assessment is AI-generated; personal notes are not built)
 - **Public access (formerly Phase 4):** a public calculator with no login and no save, plus saved valuations and notes for logged-in users, which would need the managed auth provider from "If This Is Ever Productized". Ties into the personal finance website concept (separate project)
 - **FMP paid upgrade** if EDGAR's coverage or speed becomes the bottleneck for screening
