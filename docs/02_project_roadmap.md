@@ -46,6 +46,8 @@ This is a research tool — no payments flow through it. It is initially single-
 | **News sub-tab** | **Done.** "Why is the stock moving": web-search news context plus recent 8-K/6-K filings, labeled amber "NEWS CONTEXT, NOT FROM FILINGS" |
 | Auth | **Single-user login done** (username/password, signed session cookie, DB-backed lockout). Multi-user auth (Clerk) not built; `user_id` is still the hardcoded `'local'` |
 | Cross-company screener | Not built (see Next Up) |
+| **Charts** (All-in-One B) | **Prototype done.** KLineChart 10.1.0, full-viewport Charts page and interactive Price card on Filings (in-place expand/minimize), drawing tools, EMA/SMA, compare. Daily prices from FMP free tier via `api/prices.js` (cached in `price_history`); FMP free doesn't cover every symbol (e.g. small caps) — Schwab data replaces it next |
+| **Schwab connection** (All-in-One A) | **Done (read-only).** OAuth via `api/schwab.js` (`/api/schwab/connect`, `/callback`, `/status`, `/accounts`, `/disconnect`, routed by a `vercel.json` rewrite), encrypted tokens in `schwab_tokens`, 30-min auto-refresh, 7-day reconnect, nav status button and `/schwab` accounts/positions page. Connect on the live site (Schwab requires the https callback); localhost uses the same Neon tokens |
 
 ### Phase 1 — DCF Calculator (done)
 
@@ -431,7 +433,7 @@ CREATE INDEX idx_login_attempts_ip ON login_attempts(ip, attempted_at);
 | Brokerage/market data (planned) | Schwab Trader API – Individual | OAuth, 7-day refresh token; streaming from the browser only |
 | Charts (planned) | KLineChart (prototype) or TradingView Lightweight Charts | Both Apache 2.0 |
 
-Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), `DAILY_NEWS_LIMIT` (default 10), and `COOKIE_DOMAIN` (unset = host-only cookie). Planned for Schwab: `SCHWAB_APP_KEY`, `SCHWAB_APP_SECRET`, `SCHWAB_CALLBACK_URL`.
+Environment variables (server-side only, never in frontend JS): `NEON_DATABASE_URL`, `FMP_API_KEY`, `SEC_USER_AGENT`, `ANTHROPIC_API_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `SESSION_SECRET`, optional `ANTHROPIC_MODEL`, `DAILY_STORY_LIMIT` (default 5), `DAILY_NEWS_LIMIT` (default 10), and `COOKIE_DOMAIN` (unset = host-only cookie). Schwab: `SCHWAB_APP_KEY` (Client ID), `SCHWAB_APP_SECRET` (Client Secret), `SCHWAB_CALLBACK_URL` (`https://stockinator5000.vercel.app/api/schwab/callback`). Locally, `api/_env.js` loads `.env.local` for `vercel dev` (no rename to `.env` needed; values are read literally).
 
 ---
 
