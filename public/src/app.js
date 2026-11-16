@@ -4,6 +4,7 @@ import { renderReverse } from './reverse.js';
 import { renderFilings, FILINGS_PREFILL_KEY } from './filings.js';
 import { renderLogin } from './login.js';
 import { renderCharts, disposeCharts } from './charts.js';
+import { renderSchwab, updateSchwabNav } from './schwab.js';
 
 const app = document.getElementById('app');
 const loginScreen = document.getElementById('login-screen');
@@ -13,6 +14,7 @@ const tabReverse = document.getElementById('tab-reverse');
 const tabFilings = document.getElementById('tab-filings');
 const tabVal = document.getElementById('tab-valuations');
 const tabCharts = document.getElementById('tab-charts');
+const schwabNav = document.getElementById('schwab-status');
 
 function setActiveTab(route) {
   tabCharts.classList.toggle('active', route === '/charts' || route.startsWith('/chart/'));
@@ -20,6 +22,7 @@ function setActiveTab(route) {
   tabReverse.classList.toggle('active', route === '/reverse');
   tabFilings.classList.toggle('active', route === '/filings');
   tabVal.classList.toggle('active', route === '/valuations');
+  schwabNav.classList.toggle('active', route === '/schwab');
 }
 
 function normalizeRoute() {
@@ -28,6 +31,7 @@ function normalizeRoute() {
   if (path === '/filings') return '/filings';
   if (path === '/reverse') return '/reverse';
   if (path === '/charts') return '/charts';
+  if (path === '/schwab') return '/schwab';
   if (/^\/chart\/[^/]+\/?$/.test(path)) return path.replace(/\/$/, '');
   return '/calculator';
 }
@@ -61,6 +65,8 @@ function render(prefill) {
       try { ticker = decodeURIComponent(route.slice('/chart/'.length)); } catch (err) { ticker = ''; }
     }
     renderCharts(app, { ticker });
+  } else if (route === '/schwab') {
+    renderSchwab(app, { onStatusChange: () => updateSchwabNav(schwabNav) });
   } else if (route === '/valuations') {
     renderValuations(app, (data) => {
       navigate('/calculator');
@@ -104,6 +110,7 @@ function showApp() {
   loginScreen.replaceChildren();
   document.body.classList.remove('locked');
   render();
+  updateSchwabNav(schwabNav);
 }
 
 // Any 401 from an API route sends the user back to the login screen (the login call itself is exempt).
@@ -136,6 +143,7 @@ tabReverse.addEventListener('click', () => navigate('/reverse'));
 tabFilings.addEventListener('click', () => navigate('/filings'));
 tabVal.addEventListener('click', () => navigate('/valuations'));
 tabCharts.addEventListener('click', () => navigate('/charts'));
+schwabNav.addEventListener('click', () => navigate('/schwab'));
 
 window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('locked')) render();

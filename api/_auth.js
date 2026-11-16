@@ -1,3 +1,4 @@
+import './_env.js'; // must stay first: loads .env.local for vercel dev
 import crypto from 'node:crypto';
 
 // Server-side only. Single-user HMAC session cookie helpers.
