@@ -1,8 +1,10 @@
 import { TOOLS, TOOL_GROUPS, defaultStyle, registerAll, compareStore } from './chart-overlays.js';
 import {
   SAMPLE_TICKERS, NO_DATA_MESSAGE, MAX_COMPARE, PERIODS, TF_GROUPS, TF_ENABLED, IND_KEYS,
-  tokens, loadDaily, aggregate, loadSettings, saveSettings, settingsKey, loadGlobal, saveGlobal, failureMessage,
+  tokens, loadBars, loadSettings, saveSettings, settingsKey, loadGlobal, saveGlobal, failureMessage,
+  isIntraday, INTRADAY, tfOfPeriod, bucketStart, inRegularSession, tradingDayKey, periodKey,
 } from './chart-data.js';
+import { subscribeQuotes, onStreamStatus, streamStatus } from './schwab-stream.js';
 
 // The reusable chart component. Used by the Charts page (mode 'full') and the Price card on the Filings company view
 // (mode 'card': same features, icon-only toolbars, can expand in place). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
@@ -120,6 +122,15 @@ function formatBarDate({ timestamp, template }) {
   return String(template).replace(/\s*HH:mm(?::ss)?/g, '').replace(/YYYY|MM|DD|HH|mm/g, (t) => parts[t]);
 }
 
+// Intraday bars are shown in Pacific time (the market opens at 06:30)
+export const CHART_TZ = 'America/Los_Angeles';
+const laParts = new Intl.DateTimeFormat('en-US', { timeZone: CHART_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+function formatIntradayDate({ timestamp, template }) {
+  const p = Object.fromEntries(laParts.formatToParts(new Date(timestamp)).map((x) => [x.type, x.value]));
+  const parts = { YYYY: p.year, MM: p.month, DD: p.day, HH: p.hour, mm: p.minute, ss: p.second };
+  return String(template).replace(/YYYY|MM|DD|HH|mm|ss/g, (t) => parts[t]);
+}
+
 function buildStyles(c, G) {
   const line = (color) => ({ color });
   const axis = { axisLine: { color: c.border }, tickLine: { color: c.border }, tickText: { color: c.text2, family: c.mono, size: 11 } };
@@ -150,7 +161,8 @@ function buildStyles(c, G) {
 
 const fmtPrice = (v) => (Number.isFinite(v) ? v.toFixed(2) : '--');
 const fmtVol = (v) => (!Number.isFinite(v) ? '--' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(Math.round(v)));
-const TF_LABEL = { D: 'Daily', W: 'Weekly', M: 'Monthly' };
+const TF_LABEL = { '1m': '1 min', '5m': '5 min', '15m': '15 min', '30m': '30 min', '1h': '1 hour', '4h': '4 hour', D: 'Daily', W: 'Weekly', M: 'Monthly' };
+const SOURCE_LABEL = { schwab: 'Data: Schwab', fmp: 'Data: FMP (free, delayed)', sample: 'Data: sample file' };
 
 // ---------- Mount ----------
 
@@ -186,6 +198,17 @@ function createView(kc, c, host, opts) {
   let crossIdx = null;
   let fitPending = false;
   const cmpIds = new Map();
+  let dataSource = null; // 'schwab' | 'fmp' | 'sample' for the loaded bars
+  let liveOff = null; // unsubscribe from the Schwab live stream
+  const lg = {};
+  function paintLive() {
+    if (!lg.live) return;
+    const on = !!liveOff && streamStatus() === 'live';
+    lg.live.hidden = !liveOff;
+    lg.live.classList.toggle('on', on);
+    lg.live.textContent = on ? '● LIVE' : '● connecting';
+    lg.live.title = on ? 'Live prices from Schwab' : 'Connecting to Schwab live prices…';
+  }
 
   // ----- DOM skeleton -----
   const root = el('div', { class: `vlc-view${card ? ' cardmode' : ''}` });
@@ -242,14 +265,16 @@ function createView(kc, c, host, opts) {
   const lgLine = el('div', { class: 'vlc-lg-line' });
   const lgChips = el('div', { class: 'vlc-lg-chips' });
   legend.append(lgLine, lgChips);
-  const lg = {};
   function buildLegendLine() {
     lgLine.replaceChildren();
     lg.sym = el('span', { class: 'vlc-lg-sym mono', text: tkr });
     lg.tf = el('span', { class: 'vlc-lg-tf', text: TF_LABEL[settings.tf] || settings.tf });
     lg.o = el('span', { class: 'mono' }); lg.h = el('span', { class: 'mono' }); lg.l = el('span', { class: 'mono' }); lg.cl = el('span', { class: 'mono' }); lg.chg = el('span', { class: 'mono' }); lg.v = el('span', { class: 'mono vlc-dim' });
     const pair = (k, node) => el('span', { class: 'vlc-lg-pair' }, [el('span', { class: 'vlc-dim', text: k }), node]);
-    lgLine.append(lg.sym, lg.tf, pair('O', lg.o), pair('H', lg.h), pair('L', lg.l), pair('C', lg.cl), lg.chg, pair('Vol', lg.v));
+    lg.live = el('span', { class: 'vlc-live', text: '● LIVE', attrs: { hidden: '', title: 'Live prices from Schwab' } });
+    lg.src = el('span', { class: 'vlc-src', text: SOURCE_LABEL[dataSource] || '' });
+    lgLine.append(lg.sym, lg.tf, pair('O', lg.o), pair('H', lg.h), pair('L', lg.l), pair('C', lg.cl), lg.chg, pair('Vol', lg.v), lg.live, lg.src);
+    paintLive();
   }
   let chipRefs = [];
   let relegendTimer = 0;
@@ -336,11 +361,11 @@ function createView(kc, c, host, opts) {
     for (const [t, id] of [...cmpIds]) if (!settings.compare.includes(t)) { chart.removeIndicator({ id }); cmpIds.delete(t); }
     for (let i = 0; i < settings.compare.length; i++) {
       const t = settings.compare[i];
-      let daily;
-      try { daily = await loadDaily(t); } catch (err) { continue; }
+      let cbars;
+      try { cbars = await loadBars(t, settings.tf, { ext: G.ext }); } catch (err) { continue; }
       if (destroyed || !chart) return;
-      const key = `${t}|${settings.tf}`;
-      compareStore.set(key, new Map(aggregate(daily, settings.tf).map((b) => [b.timestamp, b.close])));
+      const key = `${t}|${settings.tf}|${G.ext ? 1 : 0}`;
+      compareStore.set(key, new Map(cbars.map((b) => [b.timestamp, b.close])));
       const extendData = { ticker: t, color: c.compare[i % c.compare.length], key, baseIndex: Math.max(0, chart.getVisibleRange().from) };
       if (cmpIds.has(t)) chart.overrideIndicator({ id: cmpIds.get(t), name: 'VL_CMP', extendData });
       else {
@@ -356,7 +381,7 @@ function createView(kc, c, host, opts) {
   async function addCompare(raw) {
     const t = String(raw || '').trim().toUpperCase();
     if (!TICKER_RE.test(t) || t === tkr || settings.compare.includes(t) || settings.compare.length >= MAX_COMPARE) return 'Enter a different ticker.';
-    try { await loadDaily(t); } catch (err) { return failureMessage(err); }
+    try { await loadBars(t, settings.tf, { ext: G.ext }); } catch (err) { return failureMessage(err); }
     settings.compare.push(t);
     persist();
     renderChips();
@@ -373,6 +398,8 @@ function createView(kc, c, host, opts) {
   // ----- visible range: daily opens on the last ~2 years, weekly and monthly on everything; "Fit all" shows all bars -----
   const RIGHT_PAD_BARS = 4;
   const DEFAULT_DAILY_BARS = 504;
+  // Intraday opens on roughly: 1m one session, 5m three, 15m five, 30m ten, 1h ~20, 4h ~60 sessions
+  const DEFAULT_BARS = { '1m': 390, '5m': 234, '15m': 130, '30m': 130, '1h': 140, '4h': 120, D: DEFAULT_DAILY_BARS };
   function fitAll(all = false) {
     if (!chart) return;
     const list = chart.getDataList();
@@ -380,7 +407,7 @@ function createView(kc, c, host, opts) {
     if (!list.length) return;
     if (!size || size.width < 60) { fitPending = true; return; }
     fitPending = false;
-    const n = !all && settings.tf === 'D' ? Math.min(list.length, DEFAULT_DAILY_BARS) : list.length;
+    const n = !all && DEFAULT_BARS[settings.tf] ? Math.min(list.length, DEFAULT_BARS[settings.tf]) : list.length;
     const space = size.width / (n + RIGHT_PAD_BARS);
     chart.setOffsetRightDistance(space * RIGHT_PAD_BARS);
     chart.setBarSpace(space);
@@ -395,6 +422,7 @@ function createView(kc, c, host, opts) {
     persist();
     lg.tf.textContent = TF_LABEL[tf] || tf;
     renderTfBar?.();
+    chart.setTimezone(isIntraday(tf) ? CHART_TZ : 'UTC');
     chart.setPeriod(PERIODS[tf]);
   }
   function switchTicker(raw) {
@@ -723,6 +751,8 @@ function createView(kc, c, host, opts) {
           row('Up', colorInput(G.candle.up, (val) => { G.candle.up = val; setCandleColors(); }, 'Up candle color')),
           row('Down', colorInput(G.candle.down, (val) => { G.candle.down = val; setCandleColors(); }, 'Down candle color')),
           el('button', { class: 'vlc-btn', text: 'Reset candle colors', attrs: { type: 'button' }, on: { click: () => { G.candle = { up: c.green, down: c.red }; setCandleColors(); gearMenu.rec.menu.hidden = true; } } }),
+          el('div', { class: 'vlc-menu-head', text: 'Session' }),
+          check('Extended hours (pre/after-market, intraday)', G.ext, (on) => { G.ext = on; persistGlobal(); if (isIntraday(settings.tf)) reloadData(); else refreshCompare(); }),
         );
       },
     });
@@ -828,12 +858,32 @@ function createView(kc, c, host, opts) {
     left.append(lockBtn, el('button', { class: 'vlc-tool danger', attrs: { type: 'button', title: 'Delete all drawings on this ticker', 'aria-label': 'Delete all drawings' }, on: { click: deleteAllDrawings } }, icon('trash', 22)));
   }
 
+  // ----- live data (Schwab stream) -----
+  function stopLive() {
+    if (liveOff) { liveOff(); liveOff = null; }
+    paintLive();
+  }
+  const offStatus = onStreamStatus(() => paintLive());
+  let legendRaf = 0;
+  function scheduleLegend() {
+    cancelAnimationFrame(legendRaf);
+    legendRaf = requestAnimationFrame(updateLegend);
+  }
+  function reloadData() {
+    // Re-create the chart so new data (e.g. extended hours on/off) loads; drawings and settings are kept
+    cancelPending();
+    closeFloat();
+    destroyChart();
+    createChart();
+  }
+
   // ----- chart lifecycle -----
   let ro = null;
   function createChart() {
     setMsg('');
     chart = kc.init(canvas, {
-      timezone: 'UTC', locale: 'en-US', styles: buildStyles(c, G), formatter: { formatDate: formatBarDate },
+      timezone: isIntraday(settings.tf) ? CHART_TZ : 'UTC', locale: 'en-US', styles: buildStyles(c, G),
+      formatter: { formatDate: (a) => (isIntraday(settings.tf) ? formatIntradayDate(a) : formatBarDate(a)) },
       layout: { barSpaceLimit: { min: 0.05, max: 60 } },
     });
     if (!chart) { setMsg('Chart could not start.'); return; }
@@ -841,18 +891,65 @@ function createView(kc, c, host, opts) {
       getBars: async ({ type, symbol, period, callback }) => {
         if (type !== 'init') { callback([], false); return; }
         try {
-          const tf = Object.keys(PERIODS).find((k) => PERIODS[k].type === period.type) || 'D';
-          const bars = aggregate(await loadDaily(symbol.ticker), tf);
+          const tf = tfOfPeriod(period);
+          const bars = await loadBars(symbol.ticker, tf, { ext: G.ext });
           if (destroyed) return;
-          callback(bars, false);
+          dataSource = bars.source || null;
+          lg.src.textContent = SOURCE_LABEL[dataSource] || '';
+          callback(bars.map((b) => ({ ...b })), false);
           setMsg('');
           requestAnimationFrame(() => { fitAll(); updateLegend(); });
           refreshCompare();
         } catch (err) {
+          dataSource = null;
+          lg.src.textContent = '';
           callback([], false);
           setMsg(failureMessage(err));
         }
       },
+      // Live: Schwab streaming quotes move the newest bar (or open a new one) as trades happen
+      subscribeBar: ({ symbol, period, callback }) => {
+        stopLive();
+        if (dataSource !== 'schwab') return; // FMP/sample data is end-of-day; live prices only on Schwab data
+        const tf = tfOfPeriod(period);
+        let prevTotal = null;
+        liveOff = subscribeQuotes(symbol.ticker, (q) => {
+          if (!chart || destroyed || !Number.isFinite(q.last)) return;
+          const now = Number.isFinite(q.tradeTime) ? q.tradeTime : Date.now();
+          const delta = Number.isFinite(q.totalVolume) && prevTotal !== null ? Math.max(0, q.totalVolume - prevTotal) : 0;
+          if (Number.isFinite(q.totalVolume)) prevTotal = q.totalVolume;
+          const regular = inRegularSession(now);
+          const list = chart.getDataList();
+          const last = list[list.length - 1];
+          if (!last) return;
+          let key;
+          if (isIntraday(tf)) {
+            if (!regular && !G.ext) return;
+            key = bucketStart(now, INTRADAY[tf].size);
+          } else {
+            if (!regular) return; // daily-type candles use regular-session prices, like thinkorswim/TradingView
+            key = periodKey(tradingDayKey(now), tf);
+          }
+          if (key < last.timestamp) return;
+          const p = q.last;
+          let bar;
+          if (key === last.timestamp) {
+            bar = { ...last, close: p, high: Math.max(last.high, p), low: Math.min(last.low, p), volume: last.volume + delta };
+          } else {
+            bar = { timestamp: key, open: p, high: p, low: p, close: p, volume: delta };
+          }
+          if (tf === 'D') {
+            // Schwab's day totals are exact for the daily candle
+            if (Number.isFinite(q.dayHigh) && q.dayHigh > 0) bar.high = Math.max(bar.high, q.dayHigh);
+            if (Number.isFinite(q.dayLow) && q.dayLow > 0) bar.low = Math.min(bar.low, q.dayLow);
+            if (Number.isFinite(q.totalVolume)) bar.volume = q.totalVolume;
+          }
+          callback(bar);
+          scheduleLegend();
+        });
+        paintLive();
+      },
+      unsubscribeBar: () => stopLive(),
     });
     chart.setSymbol({ ticker: tkr, pricePrecision: 2, volumePrecision: 0 });
     chart.setPeriod(PERIODS[settings.tf]);
@@ -888,6 +985,7 @@ function createView(kc, c, host, opts) {
     ro.observe(canvas);
   }
   function destroyChart() {
+    stopLive();
     if (ro) { ro.disconnect(); ro = null; }
     if (chart) { try { kc.dispose(canvas); } catch (err) { /* already gone */ } }
     chart = null;
@@ -960,6 +1058,8 @@ function createView(kc, c, host, opts) {
       document.removeEventListener('pointerdown', onDocDown);
       window.removeEventListener('storage', onStorage);
       cancelAnimationFrame(posRaf);
+      cancelAnimationFrame(legendRaf);
+      offStatus();
       destroyChart();
       root.remove();
       views.delete(api);

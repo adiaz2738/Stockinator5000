@@ -161,7 +161,7 @@ async function refreshAccessToken(row) {
   return json.access_token;
 }
 
-async function getAccessToken({ forceRefresh = false } = {}) {
+export async function getAccessToken({ forceRefresh = false } = {}) {
   if (!schwabConfig()) throw new SchwabNotConnected('not_configured');
   const row = await loadTokens();
   if (!row) throw new SchwabNotConnected('not_connected');
@@ -215,4 +215,20 @@ export async function schwabGet(url) {
     return res.json();
   }
   throw new SchwabNotConnected('expired');
+}
+
+// Everything the browser needs to open Schwab's live data WebSocket: the socket URL and client ids from the user's
+// preferences, plus a current access token (valid up to 30 minutes; the browser asks again when reconnecting).
+export async function streamerCredentials() {
+  const prefs = await schwabGet(`${TRADER_BASE}/userPreference`);
+  const info = Array.isArray(prefs?.streamerInfo) ? prefs.streamerInfo[0] : null;
+  if (!info?.streamerSocketUrl) throw new Error('streamer_info_missing');
+  return {
+    url: info.streamerSocketUrl,
+    customerId: info.schwabClientCustomerId,
+    correlId: info.schwabClientCorrelId,
+    channel: info.schwabClientChannel,
+    functionId: info.schwabClientFunctionId,
+    accessToken: await getAccessToken(),
+  };
 }

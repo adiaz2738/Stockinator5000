@@ -1,7 +1,7 @@
 import { requireAuth } from './_auth.js';
 import {
   AUTHORIZE_URL, TRADER_BASE, SchwabNotConnected, schwabConfig, createOAuthState, consumeOAuthState,
-  exchangeCodeForTokens, connectionStatus, disconnect, schwabGet,
+  exchangeCodeForTokens, connectionStatus, disconnect, schwabGet, streamerCredentials,
 } from './_schwab.js';
 
 // One function for every Schwab action (keeps the Vercel function count low). vercel.json rewrites
@@ -11,6 +11,7 @@ import {
 //                                on a cross-site redirect, so the one-time `state` proves who started it)
 //   GET  /api/schwab/status      connection status for the nav
 //   GET  /api/schwab/accounts    read-only accounts, balances and positions
+//   GET  /api/schwab/stream      live-data WebSocket details + a current access token (for the browser's streamer)
 //   POST /api/schwab/disconnect  forget the saved tokens
 // Read-only: nothing here places, changes or cancels orders.
 
@@ -86,6 +87,10 @@ export default async function handler(req, res) {
       const data = await schwabGet(`${TRADER_BASE}/accounts?fields=positions`);
       const accounts = (Array.isArray(data) ? data : []).map(slimAccount);
       return res.status(200).json({ accounts, fetchedAt: new Date().toISOString() });
+    }
+
+    if (action === 'stream' && req.method === 'GET') {
+      return res.status(200).json(await streamerCredentials());
     }
 
     if (action === 'disconnect' && req.method === 'POST') {

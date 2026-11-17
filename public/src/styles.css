@@ -847,3 +847,8 @@ table.schwab-table tbody tr { cursor: default; }
 table.schwab-table td.up { color: var(--green); }
 table.schwab-table td.down { color: var(--red); }
 .schwab-desc { font-size: 11px; color: var(--text-3); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Charts: live indicator and data source ---------- */
+.vlc-live { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-left: 4px; white-space: nowrap; }
+.vlc-live.on { color: var(--green); }
+.vlc-src { font-size: 11px; color: var(--text-3); margin-left: 6px; white-space: nowrap; }
