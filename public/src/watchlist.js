@@ -200,7 +200,7 @@ export function renderWatchlist(container, { onOpenFilings, onValue }) {
   function paintFoot() {
     if (schwabState === 'not_connected') foot.textContent = 'Prices need Schwab connected (Schwab button in the nav). Intrinsic values come from your latest saved valuation.';
     else if (schwabState === 'error') foot.textContent = 'Schwab prices could not be loaded right now. Intrinsic values come from your latest saved valuation.';
-    else foot.textContent = `Prices: Schwab ${streamStatus() === 'live' ? '(live)' : ''}. Intrinsic value and buy-below come from your latest saved valuation for each ticker. Buy zone = at or under buy-below; near = within ${NEAR_PCT}% above.`;
+    else foot.textContent = `Prices: Schwab${streamStatus() === 'live' ? ' (live)' : streamStatus() === 'polling' ? ' (refreshed every 5 seconds)' : ''}. Intrinsic value and buy-below come from your latest saved valuation for each ticker. Buy zone = at or under buy-below; near = within ${NEAR_PCT}% above.`;
   }
   const offStatus = onStreamStatus(() => paintFoot());
 

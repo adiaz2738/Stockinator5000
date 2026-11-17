@@ -204,11 +204,12 @@ function createView(kc, c, host, opts) {
   const lg = {};
   function paintLive() {
     if (!lg.live) return;
-    const on = !!liveOff && streamStatus() === 'live';
+    const st = streamStatus();
+    const on = !!liveOff && (st === 'live' || st === 'polling');
     lg.live.hidden = !liveOff;
     lg.live.classList.toggle('on', on);
-    lg.live.textContent = on ? '● LIVE' : '● connecting';
-    lg.live.title = on ? 'Live prices from Schwab' : 'Connecting to Schwab live prices…';
+    lg.live.textContent = on ? (st === 'polling' ? '● LIVE · 5s' : '● LIVE') : st === 'unavailable' ? '● Schwab disconnected' : '● connecting';
+    lg.live.title = st === 'polling' ? 'Prices from Schwab, refreshed every 5 seconds while the market is open' : on ? 'Live prices from Schwab (streaming)' : 'Connecting to Schwab live prices…';
   }
 
   // ----- DOM skeleton -----

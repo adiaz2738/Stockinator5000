@@ -1,6 +1,6 @@
 import { requireAuth } from './_auth.js';
 import {
-  AUTHORIZE_URL, TRADER_BASE, SchwabNotConnected, schwabConfig, createOAuthState, consumeOAuthState,
+  AUTHORIZE_URL, TRADER_BASE, MARKET_BASE, SchwabNotConnected, schwabConfig, createOAuthState, consumeOAuthState,
   exchangeCodeForTokens, connectionStatus, disconnect, schwabGet, streamerCredentials,
 } from './_schwab.js';
 
@@ -12,6 +12,7 @@ import {
 //   GET  /api/schwab/status      connection status for the nav
 //   GET  /api/schwab/accounts    read-only accounts, balances and positions
 //   GET  /api/schwab/stream      live-data WebSocket details + a current access token (for the browser's streamer)
+//   GET  /api/schwab/quotes?symbols=AAPL,MCD   current quotes (the browser polls this when the WebSocket is refused)
 //   POST /api/schwab/disconnect  forget the saved tokens
 // Read-only: nothing here places, changes or cancels orders.
 
@@ -87,6 +88,21 @@ export default async function handler(req, res) {
       const data = await schwabGet(`${TRADER_BASE}/accounts?fields=positions`);
       const accounts = (Array.isArray(data) ? data : []).map(slimAccount);
       return res.status(200).json({ accounts, fetchedAt: new Date().toISOString() });
+    }
+
+    if (action === 'quotes' && req.method === 'GET') {
+      const symbols = [...new Set(String(req.query?.symbols || '').toUpperCase().split(',').map((s) => s.trim()).filter((s) => /^[A-Z][A-Z0-9.\-\/]{0,9}$/.test(s)))].slice(0, 100);
+      if (!symbols.length) return res.status(400).json({ error: 'symbols required' });
+      const data = await schwabGet(`${MARKET_BASE}/quotes?${new URLSearchParams({ symbols: symbols.join(','), fields: 'quote' })}`);
+      const out = {};
+      for (const [sym, item] of Object.entries(data || {})) {
+        const q = item?.quote || {};
+        out[sym.toUpperCase()] = {
+          last: num(q.lastPrice), totalVolume: num(q.totalVolume), dayHigh: num(q.highPrice), dayLow: num(q.lowPrice),
+          prevClose: num(q.closePrice), tradeTime: num(q.tradeTime),
+        };
+      }
+      return res.status(200).json({ quotes: out, at: Date.now() });
     }
 
     if (action === 'stream' && req.method === 'GET') {
