@@ -1053,14 +1053,31 @@ const missingSection = () => ({ status: 'missing', text: '', chars: 0, truncated
 
 // 10-K: locate "Item N" headings; for a wanted item take the heading whose body is longest
 // (the table-of-contents entry is short, the real section is long).
-const ITEM_HEAD = /^item\s+(1a|1b|1c|1|2|3|4|5|6|7a|7|8|9a|9b|9c|9|10|11|12|13|14|15|16)\b[\s.:-]/i;
+// Tolerates the common layouts: "Item 1. Business", "ITEM 1—BUSINESS", "Item1.", "PART I – ITEM 1. BUSINESS",
+// and a heading split over lines ("ITEM" / "1." / "BUSINESS"), which some filings' HTML produces.
+const ITEM_HEAD = /^(?:part\s+[ivx]+\s*[,.:\u2013\u2014-]?\s*)?item\s*(1a|1b|1c|1|2|3|4|5|6|7a|7|8|9a|9b|9c|9|10|11|12|13|14|15|16)(?=$|[\s.:\u2013\u2014)\-])/i;
 
-function itemExtractor(lines) {
+// The line itself, or (for a short fragment like "ITEM" or "ITEM 1.") the line joined with the next one or two
+function headingText(lines, idx) {
+  const line = lines[idx];
+  if (line.length >= 20) return line;
+  let joined = line;
+  for (let k = 1; k <= 2 && idx + k < lines.length && joined.length < 40; k++) joined += ` ${lines[idx + k]}`;
+  return joined;
+}
+
+function findItemHeads(lines) {
   const heads = [];
   lines.forEach((line, idx) => {
-    const m = line.length < 200 && line.match(ITEM_HEAD);
-    if (m) heads.push({ idx, id: m[1].toLowerCase() });
+    if (line.length >= 200) return;
+    const m = headingText(lines, idx).match(ITEM_HEAD);
+    if (m) heads.push({ idx, id: m[1].toLowerCase(), text: line });
   });
+  return heads;
+}
+
+function itemExtractor(lines) {
+  const heads = findItemHeads(lines);
   return (id) => {
     let best = '';
     for (let h = 0; h < heads.length; h++) {
@@ -1107,7 +1124,7 @@ function extractSegments(lines) {
 
 // Heading keywords for exhibit-style annual reports (40-F / 20-F, or a 10-K with Exhibit 13).
 const KEYWORD_HEADS = {
-  business: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:description\s+of\s+the\s+business|general\s+development\s+of\s+the\s+business|business\s+overview|our\s+business|the\s+business|business\s+of\s+the\s+company)\b[^.]{0,60}$/i,
+  business: /^(?:item\s*1\.?\s*[\u2013\u2014:-]?\s*business\s*$|(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:description\s+of\s+the\s+business|general\s+development\s+of\s+the\s+business|business\s+overview|our\s+business|the\s+business|business\s+of\s+the\s+company)\b[^.]{0,60}$)/i,
   risk_factors: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:risk\s+factors|risks\s+and\s+uncertainties|principal\s+risks[a-z\s]*)\s*$/i,
   mdna: /^(?:item\s+\d+[a-z]?\.?\s*)?(?:\d+\.?\s*)?(?:management['’]?s\s+discussion\s+and\s+analysis|operating\s+and\s+financial\s+review[a-z\s]*)\b[^.]{0,80}$/i,
 };
@@ -1139,7 +1156,8 @@ async function fetchDocText(url) {
 
 // Returns { filing, sections } or null when the company has no annual filing. Each section is
 // { status: 'found'|'missing', text, chars, truncated, source }.
-export async function extractFilingSections(cik) {
+// diagnose: also return the heading-like lines the 10-K parser saw (for the free /api/sections check)
+export async function extractFilingSections(cik, { diagnose = false } = {}) {
   const filing = await findLatestAnnualFiling(cik);
   if (!filing) return null;
   const docs = await listFilingDocuments(filing);
@@ -1154,6 +1172,11 @@ export async function extractFilingSections(cik) {
     const lines = (await fetchDocText(filing.primaryUrl)).split('\n');
     const item = itemExtractor(lines);
     set('business', item('1'), 'Item 1');
+    // Fallback when no "Item 1" heading is recognized: the best-scoring "Business" heading
+    if (sections.business.status !== 'found') {
+      const t = extractByKeyword(lines, 'business', SECTION_CAPS.business);
+      if (t) set('business', t, 'Business (heading search)');
+    }
     set('risk_factors', item('1a'), 'Item 1A');
     set('mdna', item('7'), 'Item 7 (MD&A)');
     set('segments', extractSegments(lines), 'Segment / concentration note');
@@ -1166,6 +1189,16 @@ export async function extractFilingSections(cik) {
         const t = extractByKeyword(exLines, 'mdna', SECTION_CAPS.mdna);
         if (t) set('mdna', t, 'EX-13 (MD&A)');
       }
+    }
+    if (diagnose) {
+      const heads = findItemHeads(lines).map((h) => ({ line: h.idx, item: h.id, text: h.text.slice(0, 120) }));
+      const unmatched = lines
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => l.length < 160 && /\bitem\b/i.test(l))
+        .filter(({ i }) => !heads.some((h) => h.line === i))
+        .slice(0, 40)
+        .map(({ l, i }) => ({ line: i, text: l.slice(0, 120) }));
+      return { filing, sections, diagnostics: { totalLines: lines.length, recognizedHeadings: heads.slice(0, 80), otherLinesMentioningItem: unmatched } };
     }
     return { filing, sections };
   }

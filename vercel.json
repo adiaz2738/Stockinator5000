@@ -29,6 +29,10 @@
       "destination": "/api/company?resource=news"
     },
     {
+      "source": "/api/sections",
+      "destination": "/api/company?resource=sections"
+    },
+    {
       "source": "/api/valuations",
       "destination": "/api/saved?resource=valuations"
     },
