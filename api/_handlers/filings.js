@@ -1,7 +1,7 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
-import { loadStatements, capexFromStatement, workingCapitalFromStatement, incomeFromStatement, gainEvidenceFromStatements } from './_statements.js';
-import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from './_sec.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { loadStatements, capexFromStatement, workingCapitalFromStatement, incomeFromStatement, gainEvidenceFromStatements } from '../_statements.js';
+import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from '../_sec.js';
 
 const USER_ID = 'local';
 const CACHE_MS = 7 * 24 * 3600 * 1000;

@@ -1,6 +1,6 @@
-import { requireAuth } from './_auth.js';
-import { findLatestAnnualFiling } from './_sec.js';
-import { loadStatements } from './_statements.js';
+import { requireAuth } from '../_auth.js';
+import { findLatestAnnualFiling } from '../_sec.js';
+import { loadStatements } from '../_statements.js';
 
 const CIK_RE = /^\d{1,10}$/;
 

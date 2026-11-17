@@ -1,18 +1,9 @@
 {
   "functions": {
-    "api/narrative.js": {
+    "api/company.js": {
       "maxDuration": 300
     },
-    "api/news.js": {
-      "maxDuration": 300
-    },
-    "api/statements.js": {
-      "maxDuration": 60
-    },
-    "api/filings.js": {
-      "maxDuration": 60
-    },
-    "api/prices.js": {
+    "api/market.js": {
       "maxDuration": 30
     }
   },
@@ -20,6 +11,42 @@
     {
       "source": "/api/schwab/:action",
       "destination": "/api/schwab?action=:action"
+    },
+    {
+      "source": "/api/filings",
+      "destination": "/api/company?resource=filings"
+    },
+    {
+      "source": "/api/statements",
+      "destination": "/api/company?resource=statements"
+    },
+    {
+      "source": "/api/narrative",
+      "destination": "/api/company?resource=narrative"
+    },
+    {
+      "source": "/api/news",
+      "destination": "/api/company?resource=news"
+    },
+    {
+      "source": "/api/valuations",
+      "destination": "/api/saved?resource=valuations"
+    },
+    {
+      "source": "/api/reverse",
+      "destination": "/api/saved?resource=reverse"
+    },
+    {
+      "source": "/api/prices",
+      "destination": "/api/market?resource=prices"
+    },
+    {
+      "source": "/api/ticker",
+      "destination": "/api/market?resource=ticker"
+    },
+    {
+      "source": "/api/watchlist",
+      "destination": "/api/market?resource=watchlist"
     },
     {
       "source": "/api/(.*)",

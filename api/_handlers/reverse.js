@@ -1,5 +1,5 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
 
 const USER_ID = 'local';
 const MAX_JSON_CHARS = 20000;

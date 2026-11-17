@@ -1,7 +1,7 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
-import { listRecentCurrentReports, addCurrentReportHeadlines } from './_sec.js';
-import { fetchPriceHistory, summarizePrices } from './_fmp.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { listRecentCurrentReports, addCurrentReportHeadlines } from '../_sec.js';
+import { fetchPriceHistory, summarizePrices } from '../_fmp.js';
 
 const USER_ID = 'local';
 const CIK_RE = /^\d{1,10}$/;

@@ -1,5 +1,5 @@
-import { fmpFetch } from './_fmp.js';
-import { requireAuth } from './_auth.js';
+import { fmpFetch } from '../_fmp.js';
+import { requireAuth } from '../_auth.js';
 
 const TICKER_RE = /^[A-Za-z.-]{1,10}$/;
 

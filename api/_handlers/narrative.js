@@ -1,6 +1,6 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
-import { findLatestAnnualFiling, extractFilingSections, SECTION_KEYS } from './_sec.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { findLatestAnnualFiling, extractFilingSections, SECTION_KEYS } from '../_sec.js';
 
 const USER_ID = 'local';
 const DEFAULT_DAILY_LIMIT = 5;

@@ -1,6 +1,6 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
-import { MARKET_BASE, SchwabNotConnected, schwabGet } from './_schwab.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { MARKET_BASE, SchwabNotConnected, schwabGet } from '../_schwab.js';
 
 // GET /api/prices?ticker=AAPL                 daily OHLCV (Schwab when connected, otherwise FMP's free tier)
 // GET /api/prices?ticker=AAPL&freq=5&ext=1    intraday minute bars from Schwab (freq 1, 5, 15 or 30; ext=1 adds pre/after-hours)

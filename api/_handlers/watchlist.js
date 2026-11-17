@@ -1,6 +1,6 @@
-import sql from './_db.js';
-import { requireAuth } from './_auth.js';
-import { MARKET_BASE, SchwabNotConnected, schwabGet } from './_schwab.js';
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { MARKET_BASE, SchwabNotConnected, schwabGet } from '../_schwab.js';
 
 // Watchlist (Schwab's API has no watchlists, so the list lives here).
 //   GET    /api/watchlist            rows with the latest saved valuation per ticker and current Schwab quotes

@@ -263,6 +263,7 @@ The app will live at **stocks.financinator.online**, a subdomain of the existing
 - The login cookie is **host-only** for now: the browser sends it only to `stocks.financinator.online`, so it is never shared with Financinator
 - An optional **`COOKIE_DOMAIN`** env var (unset by default) adds a `Domain=` attribute to the session cookie. Setting it to `.financinator.online` would share one login across subdomains later, as a config change rather than a code change
 - Sharing a login is not free: Financinator is in production, so it would have to be changed to accept the same cookie, both apps would then share **one `SESSION_SECRET`**, and a leak or misconfiguration in either app would expose both (one shared failure point). Keep the cookie host-only unless that trade is clearly worth it
+- **Route grouping (Vercel Hobby allows 12 functions per deployment; every non-underscore file in `api/` is one):** endpoints live in `api/_handlers/` and are served by 5 grouped functions: `auth.js`, `company.js` (filings, statements, narrative, news), `saved.js` (valuations, reverse), `market.js` (prices, ticker, watchlist), `schwab.js`. `vercel.json` rewrites the public URLs (e.g. `/api/filings` → `/api/company?resource=filings`), so browser code uses the same URLs as before. New endpoints go into an existing group
 - Helper modules in `api/` must be **prefixed with an underscore** (`_db.js`, `_auth.js`, `_sec.js`, `_fmp.js`). Vercel deploys every other file in `api/` as a public endpoint, so an un-prefixed helper would become one
 
 ---
