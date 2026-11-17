@@ -267,7 +267,7 @@ export const settingsKey = (ticker) => LS_PREFIX + ticker;
 
 // Preferences shared by every chart: favorite timeframes, candle colors, last-used tool per group, keep-drawing lock
 export function loadGlobal(c) {
-  const d = { favTfs: ['D', 'W', 'M'], candle: { up: c.green, down: c.red }, lastTool: {}, keepDrawing: false, ext: false };
+  const d = { favTfs: ['D', 'W', 'M'], candle: { up: c.green, down: c.red }, lastTool: {}, keepDrawing: false, ext: false, valLines: true };
   try {
     const g = JSON.parse(localStorage.getItem(LS_GLOBAL) || 'null');
     if (!g) return d;
@@ -277,6 +277,7 @@ export function loadGlobal(c) {
     if (g.lastTool && typeof g.lastTool === 'object') for (const [k, v] of Object.entries(g.lastTool)) if (typeof v === 'string') d.lastTool[k] = v;
     d.keepDrawing = g.keepDrawing === true;
     d.ext = g.ext === true;
+    d.valLines = g.valLines !== false;
   } catch (err) { /* defaults */ }
   return d;
 }

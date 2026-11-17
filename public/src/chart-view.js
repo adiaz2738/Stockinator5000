@@ -5,6 +5,7 @@ import {
   isIntraday, INTRADAY, tfOfPeriod, bucketStart, inRegularSession, tradingDayKey, periodKey,
 } from './chart-data.js';
 import { subscribeQuotes, onStreamStatus, streamStatus } from './schwab-stream.js';
+import { latestValuation } from './latest-valuation.js';
 
 // The reusable chart component. Used by the Charts page (mode 'full') and the Price card on the Filings company view
 // (mode 'card': same features, icon-only toolbars, can expand in place). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
@@ -694,6 +695,10 @@ function createView(kc, c, host, opts) {
           const sw = colorInput(ind.color, (v) => { ind.color = v; saveInd(); applyIndicator(key); renderChips(); updateLegend(); }, `${ind.label} color`);
           menu.append(el('label', { class: 'vlc-ind-row' }, [cb, el('span', { class: 'mono vlc-ind-name', text: ind.label }), sw]));
         }
+        menu.append(
+          el('div', { class: 'vlc-menu-head', text: 'Valuation' }),
+          check('Buy-below & intrinsic value lines', G.valLines, (on) => { G.valLines = on; persistGlobal(); applyValuationLines(); }),
+        );
       },
     });
     indTrigger.addEventListener('click', indMenu.toggle);
@@ -858,6 +863,27 @@ function createView(kc, c, host, opts) {
     left.append(lockBtn, el('button', { class: 'vlc-tool danger', attrs: { type: 'button', title: 'Delete all drawings on this ticker', 'aria-label': 'Delete all drawings' }, on: { click: deleteAllDrawings } }, icon('trash', 22)));
   }
 
+  // ----- valuation lines (latest saved valuation: buy-below and intrinsic value) -----
+  const LEVEL_IDS = ['vl_lvl_bb', 'vl_lvl_iv'];
+  async function applyValuationLines() {
+    if (!chart) return;
+    for (const id of LEVEL_IDS) chart.removeOverlay({ id });
+    if (!G.valLines) return;
+    const v = await latestValuation(tkr);
+    if (!v || !chart || destroyed) return;
+    const list = chart.getDataList();
+    const ts = list.length ? list[list.length - 1].timestamp : Date.now();
+    for (const id of LEVEL_IDS) chart.removeOverlay({ id });
+    const lines = [
+      { id: 'vl_lvl_bb', value: v.buyBelow, color: c.green, label: `Buy below $${v.buyBelow?.toFixed(2)}` },
+      { id: 'vl_lvl_iv', value: v.intrinsicValue, color: c.blue, label: `Intrinsic value $${v.intrinsicValue?.toFixed(2)}` },
+    ];
+    for (const l of lines) {
+      if (!Number.isFinite(l.value) || l.value <= 0) continue;
+      chart.createOverlay({ id: l.id, name: 'VL_LEVEL', paneId: 'candle_pane', lock: true, points: [{ timestamp: ts, value: l.value }], extendData: { color: l.color, label: l.label } });
+    }
+  }
+
   // ----- live data (Schwab stream) -----
   function stopLive() {
     if (liveOff) { liveOff(); liveOff = null; }
@@ -900,6 +926,7 @@ function createView(kc, c, host, opts) {
           setMsg('');
           requestAnimationFrame(() => { fitAll(); updateLegend(); });
           refreshCompare();
+          applyValuationLines();
         } catch (err) {
           dataSource = null;
           lg.src.textContent = '';

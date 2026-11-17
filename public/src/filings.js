@@ -3,6 +3,8 @@ import { renderNewsPane } from './news.js';
 import { renderStatementsPane, secLink, fmtFilingDate } from './statements.js';
 import { mountChartView } from './chart-view.js';
 import { NO_DATA_MESSAGE } from './chart-data.js';
+import { addToWatchlist } from './watchlist.js';
+import { latestValuation } from './latest-valuation.js';
 
 export const FILINGS_PREFILL_KEY = 'filingsPrefill';
 const REVERSE_PREFILL_KEY = 'reversePrefill';
@@ -415,7 +417,37 @@ function chartsGrid(m) {
 
 // ---------- Header card ----------
 
-function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
+// Latest saved valuation, shown in the header card so it's visible without scrolling
+function valuationStrip(ticker, { onOpenValuations }) {
+  const strip = el('div', { class: 'val-strip' }, [el('span', { class: 'val-strip-label', text: 'Latest valuation' }), el('span', { class: 'val-strip-dim', text: 'Loading…' })]);
+  if (!ticker) { strip.hidden = true; return strip; }
+  const money = (n) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : NA);
+  latestValuation(ticker).then((v) => {
+    if (!v) {
+      strip.replaceChildren(
+        el('span', { class: 'val-strip-label', text: 'Latest valuation' }),
+        el('span', { class: 'val-strip-dim', text: 'None saved yet. Use Send to Calculator, then Save Valuation.' }),
+      );
+      return;
+    }
+    const verdictCls = v.verdict === 'UNDERVALUED' ? 'pill-pass' : v.verdict === 'OVERVALUED' ? 'pill-fail' : 'pill-warn';
+    const item = (label, value, cls = '') => el('span', { class: 'val-strip-item' }, [el('span', { class: 'val-strip-dim', text: label }), el('span', { class: `mono ${cls}`.trim(), text: value })]);
+    const openBtn = el('button', { class: 'val-strip-link', text: 'All saved valuations →', attrs: { type: 'button' } });
+    openBtn.addEventListener('click', () => onOpenValuations?.());
+    strip.replaceChildren(
+      el('span', { class: 'val-strip-label', text: 'Latest valuation' }),
+      el('span', { class: 'val-strip-dim', text: new Date(v.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }),
+      item('Intrinsic value', money(v.intrinsicValue), 'val-iv'),
+      item(`Buy below${Number.isFinite(v.marginOfSafety) ? ` (${v.marginOfSafety}% MoS)` : ''}`, money(v.buyBelow), 'val-bb'),
+      v.marketPrice !== null ? item('Price then', money(v.marketPrice)) : null,
+      v.verdict ? el('span', { class: `pill ${verdictCls}`, text: v.verdict }) : null,
+      openBtn,
+    );
+  });
+  return strip;
+}
+
+function headerCard(data, { onRefresh, onSend, onSendReverse, onWatch, onOpenValuations, busy }) {
   const m = data.metrics;
   const updated = new Date(data.fetchedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const meta = (label, value) => el('div', { class: 'meta-item' }, [
@@ -444,6 +476,14 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
   sendBtn.addEventListener('click', onSend);
   const reverseBtn = el('button', { class: 'btn btn-ghost btn-inline', text: 'Send to Reverse DCF →', attrs: { type: 'button' } });
   reverseBtn.addEventListener('click', onSendReverse);
+  const watchBtn = el('button', { class: 'btn btn-ghost btn-inline', text: '+ Watchlist', attrs: { type: 'button', title: 'Add this ticker to your watchlist' } });
+  watchBtn.addEventListener('click', async () => {
+    watchBtn.disabled = true;
+    const ok = await onWatch?.().catch(() => false);
+    watchBtn.textContent = ok ? '✓ On watchlist' : 'Could not add';
+    if (!ok) watchBtn.disabled = false;
+  });
+  if (!data.ticker) watchBtn.hidden = true;
 
   const notes = [];
   if (m.coverage.missing.length) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found. Not reported in XBRL: ${m.coverage.missing.join(', ')}.`);
@@ -458,8 +498,9 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
           el('span', { class: 'mono ticker-chip', text: data.ticker || NA }),
         ]),
       ]),
-      el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn, reverseBtn]),
+      el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn, reverseBtn, watchBtn]),
     ]),
+    valuationStrip(String(data.ticker || '').toUpperCase(), { onOpenValuations }),
     el('div', { class: 'meta-row' }, [
       meta('CIK', data.cik), meta('Taxonomy', data.taxonomy || NA),
       meta('Currency', m.currency || NA), meta('Last updated', updated),
@@ -470,7 +511,14 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, busy }) {
 
 // ---------- Page ----------
 
-export function renderFilings(container, { onSendToCalculator, onSendToReverse, onOpenInCharts }) {
+export function renderFilings(container, { onSendToCalculator, onSendToReverse, onOpenInCharts, onOpenValuations, initialTicker }) {
+  // Keep the loaded ticker in the address (/filings?ticker=ACFN) so a page refresh reopens it
+  const rememberTicker = (t) => {
+    const tick = String(t || '').toUpperCase();
+    if (!tick || window.location.pathname !== '/filings') return;
+    const want = `/filings?ticker=${encodeURIComponent(tick)}`;
+    if (window.location.pathname + window.location.search !== want) window.history.replaceState({}, '', want);
+  };
   container.replaceChildren();
 
   const input = el('input', { attrs: { id: 'filings-q', type: 'text', autocomplete: 'off', placeholder: 'Ticker (e.g. V) or EDGAR URL', maxlength: '500', 'aria-label': 'Ticker or EDGAR URL' } });
@@ -590,6 +638,8 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse, 
           }
           onSendToReverse();
         },
+        onWatch: () => addToWatchlist(String(data.ticker || '').toUpperCase()),
+        onOpenValuations,
         onSend: () => {
           const m = data.metrics;
           const lastFcfPs = m.derived.fcfPerShare[m.derived.fcfPerShare.length - 1];
@@ -632,6 +682,7 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse, 
         return null;
       }
       lastLoaded = { q, data: body };
+      rememberTicker(body.ticker);
       showData(body);
       if (activeSubTab === 'statements') renderStatementsPane(statementsPane, { ensureData, getCurrentCik: () => lastLoaded?.data.cik ?? null });
       return body;
@@ -653,8 +704,13 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse, 
     load(q);
   });
 
-  if (lastLoaded) {
+  const wanted = typeof initialTicker === 'string' ? initialTicker.trim().toUpperCase().slice(0, 20) : '';
+  if (wanted && String(lastLoaded?.data?.ticker || '').toUpperCase() !== wanted) {
+    input.value = wanted;
+    load(wanted);
+  } else if (lastLoaded) {
     input.value = lastLoaded.q;
+    rememberTicker(lastLoaded.data.ticker);
     showData(lastLoaded.data);
   } else {
     showMessage('Enter a ticker or paste an EDGAR URL to see 10 years of Buffett-style metrics.', false);

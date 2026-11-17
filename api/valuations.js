@@ -33,6 +33,16 @@ export default async function handler(req, res) {
     await ensureTable();
 
     if (req.method === 'GET') {
+      // ?ticker=ACFN returns only the latest valuation for that ticker (Filings header, chart lines)
+      const tq = typeof req.query?.ticker === 'string' ? req.query.ticker.trim().toUpperCase().slice(0, 20) : '';
+      if (tq) {
+        const latest = await sql`
+          SELECT * FROM valuations
+          WHERE user_id = ${USER_ID} AND UPPER(ticker) = ${tq}
+          ORDER BY created_at DESC LIMIT 1
+        `;
+        return res.status(200).json({ valuation: latest[0] || null });
+      }
       const rows = await sql`
         SELECT * FROM valuations
         WHERE user_id = ${USER_ID}

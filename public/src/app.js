@@ -5,6 +5,7 @@ import { renderFilings, FILINGS_PREFILL_KEY } from './filings.js';
 import { renderLogin } from './login.js';
 import { renderCharts, disposeCharts } from './charts.js';
 import { renderSchwab, updateSchwabNav } from './schwab.js';
+import { renderWatchlist, disposeWatchlist } from './watchlist.js';
 
 const app = document.getElementById('app');
 const loginScreen = document.getElementById('login-screen');
@@ -14,6 +15,7 @@ const tabReverse = document.getElementById('tab-reverse');
 const tabFilings = document.getElementById('tab-filings');
 const tabVal = document.getElementById('tab-valuations');
 const tabCharts = document.getElementById('tab-charts');
+const tabWatch = document.getElementById('tab-watchlist');
 const schwabNav = document.getElementById('schwab-status');
 
 function setActiveTab(route) {
@@ -22,6 +24,7 @@ function setActiveTab(route) {
   tabReverse.classList.toggle('active', route === '/reverse');
   tabFilings.classList.toggle('active', route === '/filings');
   tabVal.classList.toggle('active', route === '/valuations');
+  tabWatch.classList.toggle('active', route === '/watchlist');
   schwabNav.classList.toggle('active', route === '/schwab');
 }
 
@@ -32,6 +35,7 @@ function normalizeRoute() {
   if (path === '/reverse') return '/reverse';
   if (path === '/charts') return '/charts';
   if (path === '/schwab') return '/schwab';
+  if (path === '/watchlist') return '/watchlist';
   if (/^\/chart\/[^/]+\/?$/.test(path)) return path.replace(/\/$/, '');
   return '/calculator';
 }
@@ -58,6 +62,7 @@ function render(prefill) {
   const route = normalizeRoute();
   setActiveTab(route);
   disposeCharts();
+  disposeWatchlist();
 
   if (route === '/charts' || route.startsWith('/chart/')) {
     let ticker;
@@ -65,6 +70,14 @@ function render(prefill) {
       try { ticker = decodeURIComponent(route.slice('/chart/'.length)); } catch (err) { ticker = ''; }
     }
     renderCharts(app, { ticker });
+  } else if (route === '/watchlist') {
+    renderWatchlist(app, {
+      onOpenFilings: (t) => navigate(`/filings?ticker=${encodeURIComponent(t)}`),
+      onValue: (ticker, companyName) => {
+        try { sessionStorage.setItem(FILINGS_PREFILL_KEY, JSON.stringify({ ticker, companyName: companyName || undefined })); } catch (err) { /* ignore */ }
+        navigate('/calculator');
+      },
+    });
   } else if (route === '/schwab') {
     renderSchwab(app, { onStatusChange: () => updateSchwabNav(schwabNav) });
   } else if (route === '/valuations') {
@@ -78,7 +91,9 @@ function render(prefill) {
   } else if (route === '/reverse') {
     renderReverse(app);
   } else if (route === '/filings') {
-    renderFilings(app, { onSendToCalculator: () => navigate('/calculator'), onSendToReverse: () => navigate('/reverse'), onOpenInCharts: (t) => navigate(`/chart/${encodeURIComponent(t)}`) });
+    // /filings?ticker=MCD loads that company (from the watchlist, or after a page refresh; Filings keeps the URL current)
+    const initialTicker = new URLSearchParams(window.location.search).get('ticker');
+    renderFilings(app, { initialTicker, onSendToCalculator: () => navigate('/calculator'), onSendToReverse: () => navigate('/reverse'), onOpenInCharts: (t) => navigate(`/chart/${encodeURIComponent(t)}`), onOpenValuations: () => navigate('/valuations') });
   } else {
     const fromFilings = prefill ? null : takeFilingsPrefill();
     if (fromFilings) {
@@ -90,7 +105,7 @@ function render(prefill) {
 }
 
 function navigate(path) {
-  if (window.location.pathname !== path) {
+  if (window.location.pathname + window.location.search !== path) {
     window.history.pushState({}, '', path);
   }
   render();
@@ -142,6 +157,7 @@ tabCalc.addEventListener('click', () => navigate('/calculator'));
 tabReverse.addEventListener('click', () => navigate('/reverse'));
 tabFilings.addEventListener('click', () => navigate('/filings'));
 tabVal.addEventListener('click', () => navigate('/valuations'));
+tabWatch.addEventListener('click', () => navigate('/watchlist'));
 tabCharts.addEventListener('click', () => navigate('/charts'));
 schwabNav.addEventListener('click', () => navigate('/schwab'));
 

@@ -852,3 +852,30 @@ table.schwab-table td.down { color: var(--red); }
 .vlc-live { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-left: 4px; white-space: nowrap; }
 .vlc-live.on { color: var(--green); }
 .vlc-src { font-size: 11px; color: var(--text-3); margin-left: 6px; white-space: nowrap; }
+
+/* ---------- Watchlist ---------- */
+.wl-page { display: flex; flex-direction: column; gap: 16px; }
+.wl-form-msg { color: var(--red); font-size: 13px; margin-top: 8px; }
+.wl-form-msg:empty { display: none; }
+table.wl-table td { vertical-align: middle; }
+table.wl-table td.up { color: var(--green); }
+table.wl-table td.down { color: var(--red); }
+table.wl-table tr.wl-buy td:first-child { box-shadow: inset 3px 0 0 var(--green); }
+table.wl-table tr.wl-near td:first-child { box-shadow: inset 3px 0 0 var(--yellow); }
+.wl-ticker { font-weight: 600; color: var(--text); }
+.wl-none { color: var(--text-3); font-size: 12px; }
+.wl-value { padding: 4px 10px; font-size: 12px; margin-top: 0; }
+.wl-date { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.wl-remove { background: none; border: none; color: var(--text-3); font-size: 18px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+.wl-remove:hover { color: var(--red); }
+
+/* ---------- Filings: latest valuation strip ---------- */
+.val-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 16px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.val-strip-label { font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
+.val-strip-dim { color: var(--text-2); }
+.val-strip-item { display: inline-flex; gap: 6px; align-items: baseline; }
+.val-strip-item .mono { color: var(--text); font-size: 14px; }
+.val-strip-item .val-iv { color: var(--blue); }
+.val-strip-item .val-bb { color: var(--green); }
+.val-strip-link { margin-left: auto; background: none; border: none; color: var(--blue); font-size: 12px; cursor: pointer; padding: 0; }
+.val-strip-link:hover { text-decoration: underline; }

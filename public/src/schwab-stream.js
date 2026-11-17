@@ -2,13 +2,14 @@
 // subscribes to the symbols it shows. Read-only market data. The access token comes from /api/schwab/stream and is
 // only used to log in to the socket; on any disconnect a fresh token is fetched before reconnecting.
 //
-//   const off = subscribeQuotes('AAPL', (q) => { q.last, q.totalVolume, q.dayHigh, q.dayLow, q.tradeTime })
+//   const off = subscribeQuotes('AAPL', (q) => { q.last, q.totalVolume, q.dayHigh, q.dayLow, q.prevClose, q.tradeTime })
 //   off()
 //   onStreamStatus((status) => ...)   // 'off' | 'connecting' | 'live' | 'unavailable' | 'error'
 
-// LEVELONE_EQUITIES field numbers: 0 symbol, 3 last price, 8 total volume, 10 day high, 11 day low, 35 trade time (ms)
-const FIELDS = '0,3,8,10,11,35';
-const MAP = { 3: 'last', 8: 'totalVolume', 10: 'dayHigh', 11: 'dayLow', 35: 'tradeTime' };
+// LEVELONE_EQUITIES field numbers: 0 symbol, 3 last price, 8 total volume, 10 day high, 11 day low, 12 previous close,
+// 35 trade time (ms)
+const FIELDS = '0,3,8,10,11,12,35';
+const MAP = { 3: 'last', 8: 'totalVolume', 10: 'dayHigh', 11: 'dayLow', 12: 'prevClose', 35: 'tradeTime' };
 const IDLE_CLOSE_MS = 30000;
 
 const listeners = new Map(); // symbol -> Set(fn)

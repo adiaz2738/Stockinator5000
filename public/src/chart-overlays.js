@@ -321,4 +321,27 @@ export function registerAll(kc, colors) {
     if (info) figs.push({ key: 'info', type: 'text', ignoreEvent: true, attrs: { x: right - 4, y: Math.max(coordinates[0].y, coordinates[1].y) + 8, text: info, align: 'right', baseline: 'top' }, styles: textStyles(s) });
     return figs;
   }));
+
+  // Valuation level (buy-below / intrinsic value from the latest saved valuation): a locked, full-width dashed line with
+  // a label on the left and a colored price tag on the axis. Not a drawing: never saved, edited or deleted with drawings.
+  kc.registerOverlay({
+    name: 'VL_LEVEL', totalStep: 2, lock: true,
+    needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+    createPointFigures: ({ overlay, coordinates, bounding }) => {
+      if (!coordinates.length) return [];
+      const color = overlay.extendData?.color || colors.green;
+      const y = coordinates[0].y;
+      return [
+        { key: 'line', type: 'line', ignoreEvent: true, attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { style: 'dashed', dashedValue: [6, 5], color, size: 1 } },
+        { key: 'label', type: 'text', ignoreEvent: true, attrs: { x: 8, y: y - 4, text: overlay.extendData?.label || '', align: 'left', baseline: 'bottom' }, styles: textStyles({ color }, { family: "'Inter', sans-serif", size: 11, weight: 600 }) },
+      ];
+    },
+    createYAxisFigures: ({ overlay, coordinates }) => {
+      if (!coordinates.length) return [];
+      const color = overlay.extendData?.color || colors.green;
+      const v = overlay.points[0]?.value;
+      if (!Number.isFinite(v)) return [];
+      return [{ type: 'text', ignoreEvent: true, attrs: { x: 0, y: coordinates[0].y, text: v.toFixed(2), align: 'left', baseline: 'middle' }, styles: { color: '#04101c', backgroundColor: color, size: 11, family: "'JetBrains Mono', monospace", weight: 600, paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2, borderRadius: 2 } }];
+    },
+  });
 }
