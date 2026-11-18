@@ -6,7 +6,7 @@
 import sql from './_db.js';
 import { secFetch, listFilingDocuments, fiscalYearOf, DOC_NAME_RE } from './_sec.js';
 
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 5; // 5: join pages that repeat the statement heading, skip parent-company-only schedules, keep unlabeled subtotals
 
 const R_PAGE_RE = /^R\d{1,4}\.htm$/;
 const MAX_ROWS = 400;
@@ -236,12 +236,22 @@ const NUMERIC_CELL = /^\(?-?\$?\s*\(?\d[\d,]*(?:\.\d+)?\)?%?$|^[—–-]$/;
 const PERIOD_CELL = /\b(?:19|20)\d\d\b/;
 const UNITS_RE = /\(?\s*(?:expressed\s+)?(?:in|US\$|\$)\s+(?:millions|thousands|billions)(?:\s+of\s+[a-z .]{1,40}?(?:dollars|euros|pounds))?(?:,?\s*except\s+[a-z ,]{1,60})?\)?/i;
 
+const UNIT_PX = { pt: 1.33, px: 1, em: 16, in: 96 };
+const toPx = (v) => {
+  const m = /^(-?[\d.]+)\s*(pt|px|em|in)?$/i.exec(String(v).trim());
+  return m ? parseFloat(m[1]) * (UNIT_PX[(m[2] || 'px').toLowerCase()] || 1) : 0;
+};
+// Left indent of a label cell, from its own style or the elements inside it: padding-left / margin-left /
+// text-indent, or the left value of a "padding: top right bottom left" shorthand (Apollo's 10-K uses that)
 function indentOf(html) {
-  const m = /(?:padding-left|margin-left|text-indent)\s*:\s*(-?[\d.]+)\s*(pt|px|em|in)/i.exec(html);
-  if (!m) return 0;
-  const n = parseFloat(m[1]);
-  const f = { pt: 1.33, px: 1, em: 16, in: 96 }[m[2].toLowerCase()];
-  return Math.max(0, n * f);
+  let px = 0;
+  for (const m of html.matchAll(/(?:padding-left|margin-left|text-indent)\s*:\s*(-?[\d.]+\s*(?:pt|px|em|in)?)/gi)) px += Math.max(0, toPx(m[1]));
+  for (const m of html.matchAll(/(?:^|[;"'\s])padding\s*:\s*([^;"']+)/gi)) {
+    const parts = m[1].trim().split(/\s+/);
+    const left = parts.length === 4 ? parts[3] : parts.length >= 2 ? parts[1] : parts[0];
+    px += Math.max(0, toPx(left));
+  }
+  return px;
 }
 
 function parseDocumentTable(tableHtml) {
@@ -250,7 +260,7 @@ function parseDocumentTable(tableHtml) {
   const indents = [];
   const lead = [];
   for (const tr of rowsOf(tableHtml)) {
-    const texts = cellsOf(tr).map((c) => ({ text: cellText(c.html), html: c.html }));
+    const texts = cellsOf(tr).map((c) => ({ text: cellText(c.html), html: `<td ${c.attrs}>${c.html}` }));
     // merge split closing parentheses and drop bare currency symbols
     const cells = [];
     for (const c of texts) {
@@ -264,16 +274,23 @@ function parseDocumentTable(tableHtml) {
     if (!cells.length) continue;
     const labelled = !NUMERIC_CELL.test(cells[0].text) && !(cells.length > 1 && cells.every((c) => PERIOD_CELL.test(c.text)));
     if (!labelled) {
-      // Before the first line item, a row of years or dates is the column header; elsewhere it is skipped
+      // Before the first line item, a row of years or dates is the column header
       if (!rows.some((r) => !r.header) && cells.every((c) => PERIOD_CELL.test(c.text))) {
         periodRows.push(cells.map((c) => c.text));
         lead.push(...rows.map((r) => r.label));
         rows.length = 0;
         indents.length = 0;
+      } else if (rows.some((r) => !r.header) && cells.every((c) => NUMERIC_CELL.test(c.text))) {
+        // An unlabeled subtotal under a block of line items (the 10-K shows just the numbers)
+        indents.push(0);
+        rows.push({ label: '', values: cells.map((c) => clip(c.text, MAX_VALUE)), header: false, total: true, subtotal: true, level: 0 });
+        if (rows.length >= MAX_ROWS) break;
       }
       continue;
     }
     const label = cells[0].text;
+    // Page footers inside statement tables ("(Continued)", "See accompanying notes...") are not line items
+    if (cells.length === 1 && /^\((?:continued|concluded)\)$|^see (?:the )?accompanying notes/i.test(label)) continue;
     const values = cells.slice(1).map((c) => clip(c.text, MAX_VALUE));
     // A row of years/dates before the first line item is the column header. Title lines above it are dropped,
     // but kept as `lead` since the units note often sits there.
@@ -320,34 +337,79 @@ function structureFromIndents(rows, indents) {
   });
 }
 
+// The statement heading a table must sit under to stand in for an R page
+const HEADING_FOR = {
+  balance: /balance sheets?|statements? of financial (?:condition|position)/i,
+  income: /statements? of (?:consolidated )?(?:income|operations|earnings|comprehensive income)/i,
+  cashflow: /statements? of (?:consolidated )?cash flows?/i,
+};
+const STATEMENT_TITLE = /(?:consolidated\s+)?(?:balance sheets?|statements? of financial (?:condition|position)|statements? of [a-z ]{0,40}?(?:income|operations|earnings|cash flows?))\b/gi;
+
+// Real statements have date/year columns ("December 31, 2025"), unlike note tables ("Level 1", "Level 2", "NAV")
+const hasPeriodColumns = (parsed) => parsed.periods.length >= 1 && parsed.periods.every((p) => PERIOD_CELL.test(p));
+
+function textBefore(html, index, span) {
+  let chunk = html.slice(Math.max(0, index - span), index);
+  // the slice may start inside a tag; drop that partial tag
+  const gt = chunk.indexOf('>');
+  const lt = chunk.indexOf('<');
+  if (gt !== -1 && (lt === -1 || gt < lt)) chunk = chunk.slice(gt + 1);
+  return cellText(chunk);
+}
+
 function findTablesInDocument(html, wanted) {
   const found = {};
   const re = /<table\b[\s\S]*?<\/table>/gi;
   let m;
+  let prev = null; // the previous statement-like table, for joining a "(Continued)" statement split across pages
   while ((m = re.exec(html)) !== null) {
     const raw = m[0];
     if (raw.length < 600) continue;
     const lower = raw.toLowerCase();
     // cheap pre-filter before the table is parsed
-    if (!(lower.includes('total assets') || lower.includes('operating activities') || lower.includes('net income') || lower.includes('net earnings') || lower.includes('net loss'))) continue;
-    const parsed = parseDocumentTable(raw);
+    if (!(lower.includes('total assets') || lower.includes('total liabilities') || lower.includes('operating activities') || lower.includes('investing activities') || lower.includes('financing activities') || lower.includes('net income') || lower.includes('net earnings') || lower.includes('net loss'))) continue;
+    let parsed = parseDocumentTable(raw);
+    const before = textBefore(html, m.index, 1200);
+
+    // Parent-company-only schedules ("Schedule I — Condensed Financial Information of Registrant") are not the
+    // consolidated statements, even though they carry the same titles
+    if (/parent company only|condensed financial information of (?:the )?registrant|\bschedule i\b/i.test(before.slice(-600))) { prev = null; continue; }
+    const titlesHere = [...before.slice(-400).matchAll(STATEMENT_TITLE)];
+    const titleHere = titlesHere.length ? titlesHere[titlesHere.length - 1][0] : '';
+
+    // A statement continued on the next page: "(Continued)" between the tables, or the next page repeats the same
+    // statement heading (Apollo: "CONSOLIDATED STATEMENTS OF FINANCIAL CONDITION" on both pages)
+    let heading = '';
+    if (prev && m.index - prev.end < 60000) {
+      const between = cellText(html.slice(prev.end, m.index));
+      const sameHeading = titleHere && prev.heading && titleHere.toLowerCase() === prev.heading.toLowerCase();
+      if (sameHeading || /\(?continued\)?/i.test(between) || /\(?continued\)?/i.test(cellText(raw.slice(0, 1500)))) {
+        parsed = {
+          rows: [...prev.parsed.rows, ...parsed.rows],
+          indents: [...prev.parsed.indents, ...parsed.indents],
+          lead: prev.parsed.lead,
+          periods: prev.parsed.periods.length ? prev.parsed.periods : parsed.periods,
+        };
+        heading = prev.heading;
+      }
+    }
+    if (!heading) heading = titleHere;
     const dataRows = parsed.rows.filter((r) => !r.header).length;
+    if (hasPeriodColumns(parsed) && dataRows >= 5) prev = { parsed, heading, end: m.index + raw.length };
+    else prev = null;
     if (dataRows < 8) continue;
+
     for (const key of signature(parsed.rows)) {
       if (!wanted.includes(key)) continue;
-      // The full statement is the signature table with the most line items (MD&A holds condensed copies)
-      if (found[key] && found[key].rowCount >= dataRows) continue;
-      let chunk = html.slice(Math.max(0, m.index - 1200), m.index);
-      // the slice may start inside a tag; drop that partial tag
-      const gt = chunk.indexOf('>');
-      const lt = chunk.indexOf('<');
-      if (gt !== -1 && (lt === -1 || gt < lt)) chunk = chunk.slice(gt + 1);
-      const before = cellText(chunk);
-      // e.g. "58 Table of Contents VISA CONSOLIDATED BALANCE SHEETS" -> "CONSOLIDATED BALANCE SHEETS"
-      const titles = [...before.slice(-400).matchAll(/(?:consolidated\s+)?(?:balance sheets?|statements? of [a-z ]{3,40}?(?:income|operations|earnings|cash flows?))\b/gi)];
-      const heading = titles.length ? titles[titles.length - 1][0] : '';
+      const headingMatched = HEADING_FOR[key].test(heading);
+      const periodsOk = hasPeriodColumns(parsed);
+      // Rank: under the statement's own heading first, then real date columns, then the most line items
+      // (MD&A holds condensed copies; notes hold fair-value tables with "Total assets" rows)
+      const rank = (headingMatched ? 4 : 0) + (/consolidated/i.test(heading) ? 2 : 0) + (periodsOk ? 1 : 0);
+      const cur = found[key];
+      if (cur && (cur.rank > rank || (cur.rank === rank && cur.rowCount >= dataRows))) continue;
       const units = UNITS_RE.exec(parsed.lead.join('  '))?.[0] || UNITS_RE.exec(before.slice(-700))?.[0] || UNITS_RE.exec(cellText(raw.slice(0, 2500)))?.[0] || null;
-      found[key] = { rowCount: dataRows, parsed, before, heading, units };
+      found[key] = { rowCount: dataRows, parsed, before, heading, units, rank, headingMatched, periodsOk };
     }
   }
   return found;
@@ -392,6 +454,8 @@ export async function statementsFromDocuments(filing, wanted) {
     for (const [key, t] of Object.entries(tables)) {
       structureFromIndents(t.parsed.rows, t.parsed.indents);
       chosen[key] = {
+        headingMatched: t.headingMatched,
+        periodsOk: t.periodsOk,
         title: clip(t.heading || STATEMENT_NAMES[key], 200),
         units: t.units ? clip(t.units, 200) : null,
         periods: t.parsed.periods.map((p) => clip(p, 80)),
@@ -423,6 +487,29 @@ function finish(key, page, method, filing) {
   };
 }
 
+// SEC's R page re-orders a statement when the company reports it by segment or with other XBRL dimensions
+// (consolidated rows first, then blocks labelled like "Asset Management | VIE, Primary Beneficiary"), so it no
+// longer matches the 10-K. Signs: "|" in labels, or the same section header ("Assets", "Liabilities") repeated.
+export function isDimensionalPage(page) {
+  if (!page?.rows?.length) return false;
+  if (page.rows.some((r) => / \| /.test(r.label))) return true;
+  const seen = new Set();
+  for (const r of page.rows) {
+    if (!r.header) continue;
+    const k = r.label.toLowerCase().replace(/[:\s]+$/, '');
+    if (seen.has(k)) return true;
+    seen.add(k);
+  }
+  return false;
+}
+
+// A document table is only used in place of an R page when it sits under the statement's own heading, has
+// date columns and looks complete; otherwise SEC's (re-ordered but correct) R page is kept
+function plausibleDocTable(page) {
+  const dataRows = page?.rows?.filter((r) => !r.header && r.values?.some((v) => v !== '')) || [];
+  return page.headingMatched === true && page.periodsOk === true && dataRows.length >= 8 && dataRows.some((r) => r.total);
+}
+
 // Returns { parserVersion, statements: { balance, income, cashflow } (each null when not found) }.
 export async function fetchAsFiledStatements(filing) {
   const statements = { balance: null, income: null, cashflow: null };
@@ -432,6 +519,19 @@ export async function fetchAsFiledStatements(filing) {
     for (const [key, page] of Object.entries(fromR)) statements[key] = finish(key, page, 'r-pages', filing);
   } catch (err) {
     console.error('R page statements failed:', err);
+  }
+
+  // Segment-split R pages: try the statement table in the 10-K document itself, so the layout matches the filing
+  const dimensional = STATEMENT_KEYS.filter((k) => statements[k] && isDimensionalPage(statements[k]));
+  if (dimensional.length) {
+    try {
+      const fromDoc = await statementsFromDocuments(filing, dimensional);
+      for (const [key, page] of Object.entries(fromDoc)) {
+        if (plausibleDocTable(page)) statements[key] = { ...finish(key, page, 'document', filing), replacedSegmentView: true };
+      }
+    } catch (err) {
+      console.error('document statements (segment layout) failed:', err);
+    }
   }
 
   const missing = STATEMENT_KEYS.filter((k) => !statements[k]);
@@ -553,8 +653,15 @@ export function capexFromStatement(cf) {
   const scale = unitScale(cf?.units);
   if (!cf || scale === null) return out;
   const years = columnYears(cf);
-  const lines = investingSection(cf.rows).filter((r) => CAPITAL_LINE.test(r.label) && !NOT_CAPITAL_LINE.test(r.label));
-  if (!lines.length) return out;
+  const investing = investingSection(cf.rows);
+  const lines = investing.filter((r) => CAPITAL_LINE.test(r.label) && !NOT_CAPITAL_LINE.test(r.label));
+  if (!lines.length) {
+    // A real investing section (3+ lines with amounts) and not one property/equipment line: the company reports no capex.
+    // buildMetrics only uses this when no capex tag or component exists in any year.
+    const withAmounts = investing.filter((r) => r.values.some((v) => parseAmount(v) !== null));
+    if (withAmounts.length >= 3) out.noCapitalLines = { years: years.filter((y) => y !== null), lineCount: withAmounts.length };
+    return out;
+  }
   years.forEach((fy, col) => {
     if (fy === null) return;
     const used = [];
@@ -578,6 +685,9 @@ const SGA_LINE = /general and administrative|management fees?/i;
 const SGA_EXCLUDE = /\bgains?\b|impairment|depreciation|amortization/i;
 // A subtotal that is already net of commissions. Commissions listed above it are not deducted a second time.
 const NET_REVENUE_ROW = /^(?:total )?net (?:revenues?|sales)\b|^(?:total )?revenues?,? net\b/i;
+// Whole-statement totals (exact labels only)
+const TOTAL_REVENUE_ROW = /^total (?:net )?revenues?(?:,? net)?$/i;
+const TOTAL_EXPENSE_ROW = /^total (?:costs and |operating costs and |benefits and )?expenses$/i;
 const GAIN_WORD = /\bgains?\b/i;
 const LOSS_WORD = /\bloss(?:es)?\b/i;
 const SALE_WORD = /\b(?:sale|sales|disposal|disposals|disposition|disposed)\b/i;
@@ -596,7 +706,9 @@ export function incomeFromStatement(income) {
   const isLine = (r) => !r.header && !r.total;
 
   const costRows = rows.map((r, idx) => ({ r, idx })).filter(({ r }) => isLine(r) && COST_LINE.test(r.label) && !COST_EXCLUDE.test(r.label));
-  const sgaRows = rows.filter((r) => isLine(r) && SGA_LINE.test(r.label) && !SGA_EXCLUDE.test(r.label));
+  // Lines above the total revenues row are revenue (an asset manager's "Management fees" is income, not SG&A)
+  const totalRevAt = rows.findIndex((r) => !r.header && TOTAL_REVENUE_ROW.test(r.label.trim()));
+  const sgaRows = rows.filter((r, idx) => isLine(r) && idx > totalRevAt && SGA_LINE.test(r.label) && !SGA_EXCLUDE.test(r.label));
   const gainRows = rows.filter((r) => isLine(r) && SALE_WORD.test(r.label) && (GAIN_WORD.test(r.label) !== LOSS_WORD.test(r.label)));
 
   years.forEach((fy, col) => {
@@ -629,6 +741,15 @@ export function incomeFromStatement(income) {
       gainUsed.push({ label: r.label, amount: GAIN_WORD.test(r.label) ? Math.abs(v) : -Math.abs(v) });
     }
     if (gainUsed.length) entry.gain = { value: gainUsed.reduce((s, l) => s + l.amount, 0), lines: gainUsed };
+
+    // Total revenues and total expenses, for operating income when no operating income tag exists (financial filers)
+    const revRow = rows.find((r) => !r.header && TOTAL_REVENUE_ROW.test(r.label.trim()));
+    const expRow = rows.find((r) => !r.header && TOTAL_EXPENSE_ROW.test(r.label.trim()));
+    const rev = revRow ? amount(revRow) : null;
+    const exp = expRow ? amount(expRow) : null;
+    if (rev !== null && exp !== null) {
+      entry.opIncome = { value: rev - Math.abs(exp), lines: [{ label: revRow.label, amount: rev }, { label: expRow.label, amount: Math.abs(exp) }] };
+    }
 
     if (Object.keys(entry).length) out.set(fy, entry);
   });

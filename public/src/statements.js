@@ -4,6 +4,8 @@
 const SEC_ORIGIN = 'https://www.sec.gov/';
 const ORDER = ['balance', 'income', 'cashflow'];
 const METHOD_LABEL = { 'r-pages': 'XBRL R page', document: 'Located in the filing document' };
+const TAB_LABEL = { balance: 'Balance Sheet', income: 'Income Statement', cashflow: 'Cash Flow' };
+let activeStatement = 'balance'; // remembered across companies and tab switches
 
 // Survives tab switches.
 const cache = new Map(); // cik -> { filing, statements }
@@ -41,7 +43,8 @@ function statementCard(s) {
   ]);
 
   const unitText = s.units ? `As filed. ${s.title}. Units: ${s.units}` : `As filed. ${s.title}. Units and scale were not stated on the page; check the filing`;
-  const note = el('div', { class: 'head-note stmt-note', text: `${unitText}. Source: ${METHOD_LABEL[s.method] || s.method}.` });
+  const layoutNote = s.replacedSegmentView ? ' Taken from the 10-K document so the layout matches the filing (SEC\u2019s XBRL page splits this statement by segment).' : '';
+  const note = el('div', { class: 'head-note stmt-note', text: `${unitText}. Source: ${METHOD_LABEL[s.method] || s.method}.${layoutNote}` });
 
   const cols = Math.max(s.columns || 0, 0);
   const thead = el('thead', {}, el('tr', {}, [
@@ -90,11 +93,30 @@ function render(pane, { filing, statements }) {
     return;
   }
 
-  const cards = ORDER.map((k) => (statements[k]
-    ? statementCard(statements[k])
-    : el('div', { class: 'card empty-state', text: `${{ balance: 'Balance sheet', income: 'Income statement', cashflow: 'Cash flow statement' }[k]} not found in this filing` })));
-  pane.replaceChildren(filingLine, ...cards);
-  for (const box of pane.querySelectorAll('.table-scroll')) box.scrollLeft = 0;
+  // One statement at a time, chosen with tabs (like most finance sites)
+  if (!statements[activeStatement]) activeStatement = found[0];
+  const holder = el('div');
+  const tabs = el('div', { class: 'stmt-tabs', attrs: { role: 'tablist' } });
+  const show = (key) => {
+    activeStatement = key;
+    for (const b of tabs.children) {
+      const on = b.dataset.key === key;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+    holder.replaceChildren(statementCard(statements[key]));
+    for (const box of holder.querySelectorAll('.table-scroll')) box.scrollLeft = 0;
+  };
+  for (const k of ORDER) {
+    const b = el('button', { class: 'stmt-tab', text: TAB_LABEL[k], attrs: { type: 'button', role: 'tab', 'data-key': k } });
+    if (!statements[k]) {
+      b.disabled = true;
+      b.title = `${TAB_LABEL[k]} not found in this filing`;
+    } else b.addEventListener('click', () => show(k));
+    tabs.append(b);
+  }
+  pane.replaceChildren(filingLine, tabs, holder);
+  show(activeStatement);
 }
 
 export async function renderStatementsPane(pane, { ensureData, getCurrentCik }) {

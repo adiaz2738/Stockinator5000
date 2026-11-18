@@ -33,6 +33,10 @@
       "destination": "/api/company?resource=sections"
     },
     {
+      "source": "/api/screener",
+      "destination": "/api/company?resource=screener"
+    },
+    {
       "source": "/api/valuations",
       "destination": "/api/saved?resource=valuations"
     },

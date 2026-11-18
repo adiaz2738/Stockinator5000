@@ -35,7 +35,7 @@ export async function secFetch(url, accept = 'application/json') {
 let tickerMap = null;
 let tickerMapAt = 0;
 
-async function loadTickerMap() {
+export async function loadTickerMap() {
   if (tickerMap && Date.now() - tickerMapAt < 24 * 3600 * 1000) return tickerMap;
   const res = await secFetch(TICKERS_URL);
   if (!res.ok) throw new Error(`SEC tickers request failed with status ${res.status}`);
@@ -243,6 +243,12 @@ const METRICS = {
     'us-gaap': ['NetCashProvidedByUsedInOperatingActivities', 'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations'],
     'ifrs-full': ['CashFlowsFromUsedInOperatingActivities'],
   },
+  // Total expenses, used for operating income (revenue - total expenses) only when no operating income tag exists
+  totalExpenses: {
+    kind: 'flow',
+    'us-gaap': ['CostsAndExpenses', 'BenefitsLossesAndExpenses'],
+    'ifrs-full': [],
+  },
   capex: {
     kind: 'flow',
     // Tags that total a company's capital spending. Software and intangibles are components (below), not totals.
@@ -383,7 +389,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 7;
+export const DATA_VERSION = 8; // 8: capex 0 when none is ever reported; operating income from revenue - total expenses
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -601,11 +607,23 @@ export function buildMetrics(facts, extra = {}) {
       noteCell('capex', fy, `Derived from components: ${parts.map((p) => `${p.label} ${money(p.value)}`).join('; ')}. Standard XBRL tags only; custom-tagged lines would not be included.`);
     }
   });
+  // No capex anywhere: no capex tag or component in any year, and the latest cash flow statement has an investing
+  // section without a single property/equipment line (insurers, asset managers). Capex is then 0, so FCF = operating cash flow.
+  const noneEver = extra.statementCapex?.noCapitalLines && raw.capex.every((v) => v === null) && !res.capexParts.size;
+  if (noneEver) {
+    years.forEach((fy, i) => {
+      if (raw.capex[i] !== null || raw.operatingCashFlow[i] === null) return;
+      raw.capex[i] = 0;
+      capexMethod[i] = 'none';
+      noteCell('capex', fy, 'No capex reported: the cash flow statement has no property or equipment purchases (only investment purchases, which are not capex), and no capex tag exists in any year. Treated as 0, so FCF = operating cash flow.');
+      noteCell('fcf', fy, 'Equals operating cash flow (no capex reported). For insurers and asset managers, operating cash flow includes client and policyholder money, so it is not owner earnings.');
+    });
+  }
   const capexDerivedYears = (m) => years.filter((_, i) => capexMethod[i] === m);
 
   // Cost of revenue, SG&A and one-time gains for years where no tag provides them: read from the as-filed income
   // statement, by fixed label rules (see incomeFromStatement in _statements.js). A value with a real tag is never replaced.
-  const incomeMethod = { costOfRevenue: years.map(() => null), sga: years.map(() => null), gainOnAssetSales: years.map(() => null) };
+  const incomeMethod = { costOfRevenue: years.map(() => null), sga: years.map(() => null), gainOnAssetSales: years.map(() => null), operatingIncome: years.map(() => null) };
   const lineText = (lines) => lines.map((l) => `${l.label} ${money(l.amount)}`).join('; ');
   years.forEach((fy, i) => {
     const st = extra.statementIncome?.get(fy);
@@ -621,11 +639,24 @@ export function buildMetrics(facts, extra = {}) {
       incomeMethod.sga[i] = 'statement';
       noteCell('sga', fy, `Derived from as-filed statement: ${lineText(st.sga.lines)}. General and administrative plus management fees, including related-party fees.`);
     }
+    if (raw.operatingIncome[i] === null && st.opIncome) {
+      raw.operatingIncome[i] = st.opIncome.value;
+      incomeMethod.operatingIncome[i] = 'statement';
+      noteCell('operatingIncome', fy, `No operating income line is reported. Derived from as-filed statement: ${lineText(st.opIncome.lines)} (revenue minus total expenses).`);
+    }
     if (raw.gainOnAssetSales[i] === null && st.gain) {
       raw.gainOnAssetSales[i] = st.gain.value;
       incomeMethod.gainOnAssetSales[i] = 'statement';
       noteCell('gainOnAssetSales', fy, `Derived from as-filed statement: ${lineText(st.gain.lines)}`);
     }
+  });
+
+  // Operating income for remaining years with no tag: revenue - total expenses (CostsAndExpenses / BenefitsLossesAndExpenses)
+  years.forEach((fy, i) => {
+    if (raw.operatingIncome[i] !== null || raw.revenue[i] === null || raw.totalExpenses[i] === null) return;
+    raw.operatingIncome[i] = raw.revenue[i] - raw.totalExpenses[i];
+    incomeMethod.operatingIncome[i] = 'tags';
+    noteCell('operatingIncome', fy, `No operating income line is reported. Revenue ${money(raw.revenue[i])} minus total expenses ${money(raw.totalExpenses[i])} (${res.out.totalExpenses.values.get(fy)?.tag}).`);
   });
 
   // A tag-based gain/loss is used in ex-gains figures only when an as-filed row confirms it for that fiscal year:
@@ -822,6 +853,10 @@ export function buildMetrics(facts, extra = {}) {
   }
   if (byStatement.length) quality.summary.push(`capex for ${fmtYearRanges(byStatement)} derived from the as-filed statement`);
   if (byComponents.length) quality.summary.push(`capex for ${fmtYearRanges(byComponents)} derived from components`);
+  const byNone = capexDerivedYears('none');
+  if (byNone.length) quality.summary.push(`no capex reported for ${fmtYearRanges(byNone)} (no property or equipment purchases), so capex is 0 and FCF = operating cash flow`);
+  const opDerived = years.filter((_, i) => incomeMethod.operatingIncome[i]);
+  if (opDerived.length) quality.summary.push(`operating income for ${fmtYearRanges(opDerived)} is revenue minus total expenses (no operating income line reported)`);
 
   return {
     dataVersion: DATA_VERSION,

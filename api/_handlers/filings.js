@@ -33,6 +33,7 @@ function needsStatement(m) {
     if (m.capexMethod[i] !== 'tag') return true;
     if (m.raw.costOfRevenue[i] === null && m.raw.grossProfit[i] === null) return true;
     if (m.raw.sga[i] === null) return true;
+    if (m.raw.operatingIncome[i] === null) return true;
     // A tag-based gain/loss on asset sales must be confirmed against the as-filed statements
     if (m.raw.gainOnAssetSales[i] !== null && m.incomeMethod?.gainOnAssetSales?.[i] !== 'statement') return true;
     const ocf = m.raw.operatingCashFlow[i];
