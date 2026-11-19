@@ -929,3 +929,50 @@ table.scr-table td.na { color: var(--text-3); }
 .scr-pop-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--border); }
 .scr-pop-row .up { color: var(--green); } .scr-pop-row .down { color: var(--red); } .scr-pop-row .na { color: var(--text-3); }
 .scr-pop-note { margin-top: 6px; color: var(--text-3); font-size: 11px; }
+
+/* Screener round B: saved screens, filters, market columns */
+.scr-screens { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scr-screen-btn { margin-top: 0; padding: 4px 10px; font-size: 12px; }
+.scr-note { font-size: 12px; color: var(--yellow); }
+.scr-filters { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.scr-filter-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); padding: 5px 0; cursor: pointer; }
+.scr-filter-label { min-width: 92px; }
+.scr-industry { max-width: 170px; }
+.scr-industry-cell { font-size: 11px; color: var(--text-2); max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr-industry-cell.na { color: var(--text-3); }
+.scr-zone { white-space: nowrap; font-size: 12px; }
+td.scr-zone.na { color: var(--text-3); }
+.scr-tag { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--border-hi); color: var(--text-2); }
+.scr-tag-buy { color: var(--green); background: var(--green-dim); border-color: transparent; }
+.scr-tag-wait { color: var(--yellow); background: rgba(255,201,64,0.10); border-color: transparent; }
+#app.content-wide { max-width: 1760px; }
+.scr-progress-text { width: auto; max-width: 70%; background: var(--card); padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scr-range-num { width: 58px; }
+.scr-dash { color: var(--text-3); }
+.scr-range .scr-filter-label { min-width: 74px; }
+th.scr-sel, td.scr-sel { width: 22px; padding-right: 0; cursor: default; }
+tr.scr-selected td { background: var(--blue-glow); }
+a.scr-ticker { text-decoration: none; display: block; }
+a.scr-ticker:hover { color: var(--blue); text-decoration: underline; }
+.scr-bulk { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--blue); flex-basis: 100%; }
+
+/* Screener: rule shortcuts and industry picker */
+.scr-rules-head { display: flex; align-items: baseline; justify-content: space-between; }
+.scr-rules-links { display: inline-flex; gap: 10px; }
+.scr-link { background: none; border: none; color: var(--blue); font-size: 12px; cursor: pointer; padding: 0; }
+.scr-link:hover { text-decoration: underline; }
+.scr-ind { margin: 6px 0 4px; }
+.scr-ind-btn { width: 100%; text-align: left; cursor: pointer; padding: 6px 8px; }
+.scr-ind-panel { margin-top: 6px; border: 1px solid var(--border-hi); border-radius: 8px; padding: 8px; background: var(--surface); }
+.scr-ind-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.scr-ind-search { width: 100%; box-sizing: border-box; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: var(--text); font-size: 12px; margin-bottom: 6px; }
+.scr-chip { background: none; border: 1px solid var(--border-hi); color: var(--text-2); border-radius: 12px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+.scr-chip:hover { color: var(--blue); border-color: var(--blue); }
+.scr-ind-list { max-height: 280px; overflow-y: auto; }
+.scr-ind-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; color: var(--text); cursor: pointer; }
+.scr-ind-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr-ind-n { color: var(--text-3); font-size: 11px; }
+.vlc-msg.retry { cursor: pointer; text-decoration: underline; pointer-events: auto; }
+/* Screener number boxes: no spinner arrows (type a value; arrow keys still step it) */
+.scr-num::-webkit-outer-spin-button, .scr-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.scr-num { -moz-appearance: textfield; appearance: textfield; }

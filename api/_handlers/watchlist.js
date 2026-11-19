@@ -36,7 +36,7 @@ function parseTickers(input) {
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
-async function fetchQuotes(tickers) {
+export async function fetchQuotes(tickers) {
   if (!tickers.length) return { quotes: {}, schwab: 'ok' };
   const quotes = {};
   try {

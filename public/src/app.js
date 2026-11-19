@@ -68,6 +68,7 @@ function render(prefill) {
   disposeCharts();
   disposeWatchlist();
   disposeScreener();
+  app.classList.toggle('content-wide', route === '/screener');
 
   if (route === '/charts' || route.startsWith('/chart/')) {
     let ticker;

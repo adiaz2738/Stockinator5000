@@ -230,7 +230,9 @@ function createView(kc, c, host, opts) {
   const persist = () => saveSettings(tkr, settings, loc);
   const persistGlobal = () => saveGlobal(G);
 
-  function setMsg(text) { msg.textContent = text || ''; msg.hidden = !text; }
+  let retryable = false;
+  function setMsg(text) { msg.textContent = text || ''; msg.hidden = !text; if (!text) retryable = false; msg.classList.toggle('retry', retryable); }
+  msg.addEventListener('click', () => { if (retryable) { retryable = false; reloadData(); } });
 
   // ----- menus (dropdowns, flyouts, popovers) -----
   const menus = [];
@@ -919,7 +921,11 @@ function createView(kc, c, host, opts) {
         if (type !== 'init') { callback([], false); return; }
         try {
           const tf = tfOfPeriod(period);
-          const bars = await loadBars(symbol.ticker, tf, { ext: G.ext });
+          // Never a silent blank chart: say it's loading, and give up after 45 s with a retry
+          setMsg('Loading price data…');
+          let timer;
+          const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('timeout'), { kind: 'timeout' })), 45000); });
+          const bars = await Promise.race([loadBars(symbol.ticker, tf, { ext: G.ext }), timeout]).finally(() => clearTimeout(timer));
           if (destroyed) return;
           dataSource = bars.source || null;
           lg.src.textContent = SOURCE_LABEL[dataSource] || '';
@@ -932,7 +938,10 @@ function createView(kc, c, host, opts) {
           dataSource = null;
           lg.src.textContent = '';
           callback([], false);
-          setMsg(failureMessage(err));
+          if (destroyed) return;
+          if (err?.kind === 'timeout') console.error(`chart: price data for ${symbol.ticker} took longer than 45 s`);
+          retryable = err?.kind === 'timeout' || err?.kind === 'network';
+          setMsg(retryable ? `${failureMessage({ kind: 'network' })} Click here to retry.` : failureMessage(err));
         }
       },
       // Live: Schwab streaming quotes move the newest bar (or open a new one) as trades happen
