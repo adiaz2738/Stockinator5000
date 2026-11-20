@@ -315,6 +315,69 @@ function tableCard(m) {
   ]);
 }
 
+// ---------- IPO prospectus extras ----------
+
+const shortPeriod = (p) => String(p || '').replace(/^(\w+) months? ended (\w+) \d+,? ((?:19|20)\d\d)$/i, (_, n, mon, y) => `${n[0].toUpperCase()}${n.slice(1).toLowerCase()} mo. to ${mon.slice(0, 3)} ${y}`);
+
+// Six-month (or other interim) columns, which the fiscal-year table leaves out
+function interimCard(m) {
+  const it = m.interim;
+  if (!it || (!it.columns?.length && !it.balance)) return null;
+  const c = m.currency;
+  const money = (v) => (isNum(v) ? fmtCompact(v, c) : NA);
+  const nodes = [el('div', { class: 'section-label', text: 'Latest interim results (not in the yearly table)' })];
+  if (it.columns?.length) {
+    const rows = [
+      ['Revenue', 'Revenues', money], ['Total operating expenses', 'CostsAndExpenses', money], ['Operating income', 'OperatingIncomeLoss', money],
+      ['Net income', 'NetIncomeLoss', money], ['EPS (diluted)', 'EarningsPerShareDiluted', fmtPerShare(c)],
+      ['Operating cash flow', 'NetCashProvidedByUsedInOperatingActivities', money], ['Capex', 'PaymentsToAcquirePropertyPlantAndEquipment', money], ['Free cash flow', 'fcf', money],
+    ].filter(([, k]) => it.columns.some((col) => isNum(col[k])));
+    const cols = [...it.columns].reverse(); // newest first, like the yearly table
+    nodes.push(el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table' }, [
+      el('thead', {}, el('tr', {}, [el('th', { text: 'Period' }), ...cols.map((col) => el('th', { text: shortPeriod(col.label) }))])),
+      el('tbody', {}, rows.map(([label, k, fmt]) => el('tr', {}, [el('td', { text: label }), ...cols.map((col) => el('td', { class: isNum(col[k]) ? '' : 'na', text: isNum(col[k]) ? fmt(col[k]) : NA }))]))),
+    ])));
+    nodes.push(el('div', { class: 'head-note', text: 'Partial-year figures as filed, not annualized.' }));
+  }
+  const b = it.balance;
+  if (b) {
+    const items = [['Cash and cash equivalents', 'CashAndCashEquivalentsAtCarryingValue'], ['Short-term investments', 'ShortTermInvestments'], ['Total assets', 'Assets'], ['Total liabilities', 'Liabilities'], ['Convertible notes', 'ConvertibleNotesPayable'], ['Stockholders’ equity (deficit)', 'StockholdersEquity']].filter(([, k]) => isNum(b[k]));
+    nodes.push(el('div', { class: 'section-label interim-sub', text: `Balance sheet, ${String(b.label).replace(/^as of /i, '')}` }));
+    nodes.push(el('div', { class: 'meta-row' }, items.map(([label, k]) => el('div', { class: 'meta-item' }, [el('div', { class: 'meta-label', text: label }), el('div', { class: 'meta-value mono', text: money(b[k]) })]))));
+  }
+  return el('div', { class: 'card' }, nodes);
+}
+
+// Expenses grouped by type (no cost of revenue line): each line as filed, with its share of revenue
+function expenseCard(m) {
+  const ex = m.expenseLines;
+  if (!ex) return null;
+  const c = m.currency;
+  // newest first: interim columns (null year) are the latest; then fiscal years newest to oldest
+  const order = ex.periods.map((p, i) => i).sort((a, b) => {
+    const ya = ex.years[a] ?? 9999; const yb = ex.years[b] ?? 9999;
+    return yb - ya || b - a;
+  });
+  const cell = (v, i) => {
+    const rev = ex.revenue[i];
+    const pct = isNum(v) && isNum(rev) && rev > 0 ? ` (${Math.round((v / rev) * 100)}%)` : '';
+    return el('td', { class: isNum(v) ? '' : 'na', text: isNum(v) ? `${fmtCompact(v, c)}${pct}` : NA });
+  };
+  const label = (i) => (ex.years[i] !== null && ex.years[i] !== undefined ? `FY${ex.years[i]}` : shortPeriod(ex.periods[i]));
+  return el('div', { class: 'card' }, [
+    el('div', { class: 'section-label', text: 'Operating expenses as filed (share of revenue)' }),
+    el('div', { class: 'head-note', text: 'This company groups expenses by type instead of reporting cost of revenue, so there is no gross margin. The largest direct cost line is the closest substitute.' }),
+    el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table' }, [
+      el('thead', {}, el('tr', {}, [el('th', { text: 'Line' }), ...order.map((i) => el('th', { text: label(i) }))])),
+      el('tbody', {}, [
+        el('tr', {}, [el('td', { text: 'Revenue' }), ...order.map((i) => el('td', { text: fmtCompact(ex.revenue[i], c) }))]),
+        ...ex.lines.map((ln) => el('tr', {}, [el('td', { text: ln.label }), ...order.map((i) => cell(ln.values[i], i))])),
+        el('tr', { class: 'total-row' }, [el('td', { text: ex.totalLabel }), ...order.map((i) => cell(ex.total[i], i))]),
+      ]),
+    ])),
+  ]);
+}
+
 // Scroll the 10-year table back to its start, where the latest fiscal year now sits.
 function resetTableScroll(root) {
   for (const box of root.querySelectorAll('.table-scroll')) box.scrollLeft = 0;
@@ -457,7 +520,8 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, onWatch, onOpenVal
 
   // Built from values SEC returned (CIK, accession, document name), validated on the server
   const lf = m.latestFiling;
-  const annualLink = lf?.viewerUrl?.startsWith('https://www.sec.gov/') ? secLink(lf.viewerUrl, `Latest annual report ↗ (${lf.form}, ${fmtFilingDate(lf.filingDate)})`, 'btn btn-ghost btn-inline link-btn') : null;
+  const fromProspectus = m.source?.kind === 'prospectus';
+  const annualLink = lf?.viewerUrl?.startsWith('https://www.sec.gov/') ? secLink(lf.viewerUrl, `${fromProspectus ? 'IPO prospectus' : 'Latest annual report'} ↗ (${lf.form}, ${fmtFilingDate(lf.filingDate)})`, 'btn btn-ghost btn-inline link-btn') : null;
   const allFilingsLink = lf && /^[0-9A-Za-z-]{1,10}$/.test(lf.form)
     ? secLink(`https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(data.cik)}&type=${encodeURIComponent(lf.form)}&dateb=&owner=include&count=40`, 'All filings ↗', 'btn btn-ghost btn-inline link-btn')
     : null;
@@ -486,7 +550,8 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, onWatch, onOpenVal
   if (!data.ticker) watchBtn.hidden = true;
 
   const notes = [];
-  if (m.coverage.missing.length) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found. Not reported in XBRL: ${m.coverage.missing.join(', ')}.`);
+  if (fromProspectus) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found in the prospectus statements.`);
+  else if (m.coverage.missing.length) notes.push(`${m.coverage.found}/${m.coverage.total} metrics found. Not reported in XBRL: ${m.coverage.missing.join(', ')}.`);
   if (m.grossProfitDerived) notes.push('Gross profit computed as revenue minus cost of revenue (not separately reported).');
   if (m.quality?.summary?.length) notes.push(`Data quality: ${m.quality.summary.join('; ')}.`);
 
@@ -500,6 +565,7 @@ function headerCard(data, { onRefresh, onSend, onSendReverse, onWatch, onOpenVal
       ]),
       el('div', { class: 'head-actions' }, [annualLink, allFilingsLink, refreshBtn, sendBtn, reverseBtn, watchBtn]),
     ]),
+    ...(fromProspectus ? [el('div', { class: 'source-banner', text: m.source.note })] : []),
     valuationStrip(String(data.ticker || '').toUpperCase(), { onOpenValuations }),
     el('div', { class: 'meta-row' }, [
       meta('CIK', data.cik), meta('Taxonomy', data.taxonomy || NA),
@@ -659,8 +725,10 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse, 
         },
       }),
       priceCard(data),
+      ...[interimCard(data.metrics)].filter(Boolean),
       scorecardCard(data.metrics),
       tableCard(data.metrics),
+      ...[expenseCard(data.metrics)].filter(Boolean),
       chartsGrid(data.metrics),
     );
     resetTableScroll(results);

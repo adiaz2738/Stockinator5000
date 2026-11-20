@@ -6,7 +6,7 @@
 import sql from './_db.js';
 import { secFetch, listFilingDocuments, fiscalYearOf, DOC_NAME_RE } from './_sec.js';
 
-export const PARSER_VERSION = 5; // 5: join pages that repeat the statement heading, skip parent-company-only schedules, keep unlabeled subtotals
+export const PARSER_VERSION = 6; // 6: group headers ("Year Ended" / "Six Months Ended" / "As of") above the year row; interim columns // 5: join pages that repeat the statement heading, skip parent-company-only schedules, keep unlabeled subtotals
 
 const R_PAGE_RE = /^R\d{1,4}\.htm$/;
 const MAX_ROWS = 400;
@@ -234,6 +234,30 @@ async function statementsFromRPages(filing) {
 
 const NUMERIC_CELL = /^\(?-?\$?\s*\(?\d[\d,]*(?:\.\d+)?\)?%?$|^[—–-]$/;
 const PERIOD_CELL = /\b(?:19|20)\d\d\b/;
+// Column-group headers above the year row ("Year Ended December 31,", "Six Months Ended June 30,", "As of June 30,")
+const GROUP_CELL = /^(?:\(?unaudited\)?|as of\b|at\b|(?:fiscal )?years? ended\b|(?:three|six|nine|twelve|\d+)[- ]months? ended\b|for the (?:fiscal )?(?:years?|periods?|(?:three|six|nine|twelve) months)\b|(?:\d+|fifty-(?:two|three))[- ]weeks? ended\b|(?:january|february|march|april|may|june|july|august|september|october|november|december)\b)/i;
+const NUM_WORDS = { one: 1, three: 3, six: 6, nine: 9, twelve: 12 };
+
+// Prefixes each year/date column with its group header. Groups are matched to columns by where the years restart
+// (2023 2024 2025 | 2025 2026); with one fewer run than groups, the last group takes only the last column
+// (2024 2025 | 2026 under "As of December 31," and "As of June 30,").
+function labelPeriods(groups, periods) {
+  const gs = groups.map((g) => g.replace(/[\s,:]+$/, '')).filter((g) => !/^\(?unaudited\)?$/i.test(g));
+  if (!gs.length || !periods.length) return periods;
+  const yearOf = (p) => Number(/\b((?:19|20)\d\d)\b/.exec(p)?.[1] || 0);
+  const runs = [[0]];
+  for (let i = 1; i < periods.length; i++) {
+    if (yearOf(periods[i]) <= yearOf(periods[i - 1])) runs.push([i]);
+    else runs[runs.length - 1].push(i);
+  }
+  const owner = new Array(periods.length);
+  if (runs.length === gs.length) runs.forEach((run, g) => run.forEach((i) => { owner[i] = gs[g]; }));
+  else if (runs.length === 1 && gs.length === 2 && periods.length >= 2) periods.forEach((_, i) => { owner[i] = i === periods.length - 1 ? gs[1] : gs[0]; });
+  else if (gs.length === 1) periods.forEach((_, i) => { owner[i] = gs[0]; });
+  else return periods;
+  // a year-only cell takes the group's date; a full date keeps its own
+  return periods.map((p, i) => (/[a-z]/i.test(p) && !/^\s*\d{4}\s*$/.test(p) ? `${owner[i]} | ${p}` : `${owner[i]} ${p.trim()}`));
+}
 const UNITS_RE = /\(?\s*(?:expressed\s+)?(?:in|US\$|\$)\s+(?:millions|thousands|billions)(?:\s+of\s+[a-z .]{1,40}?(?:dollars|euros|pounds))?(?:,?\s*except\s+[a-z ,]{1,60})?\)?/i;
 
 const UNIT_PX = { pt: 1.33, px: 1, em: 16, in: 96 };
@@ -257,6 +281,7 @@ function indentOf(html) {
 function parseDocumentTable(tableHtml) {
   const rows = [];
   const periodRows = [];
+  const groups = [];
   const indents = [];
   const lead = [];
   for (const tr of rowsOf(tableHtml)) {
@@ -272,6 +297,12 @@ function parseDocumentTable(tableHtml) {
       cells.push({ ...c });
     }
     if (!cells.length) continue;
+    // Before the first line item: column-group headers ("Year Ended December 31," / "Six Months Ended June 30,")
+    if (!rows.some((r) => !r.header) && cells.every((c) => GROUP_CELL.test(c.text) && !PERIOD_CELL.test(c.text.replace(/\b(?:19|20)\d\d\b/g, '')) ) && !cells.every((c) => /^\s*(?:19|20)\d\d\s*$/.test(c.text))) {
+      const texts2 = cells.map((c) => c.text).filter((t) => !/^\(?unaudited\)?$/i.test(t));
+      if (texts2.length) { groups.length = 0; groups.push(...texts2); }
+      continue;
+    }
     const labelled = !NUMERIC_CELL.test(cells[0].text) && !(cells.length > 1 && cells.every((c) => PERIOD_CELL.test(c.text)));
     if (!labelled) {
       // Before the first line item, a row of years or dates is the column header
@@ -292,6 +323,8 @@ function parseDocumentTable(tableHtml) {
     // Page footers inside statement tables ("(Continued)", "See accompanying notes...") are not line items
     if (cells.length === 1 && /^\((?:continued|concluded)\)$|^see (?:the )?accompanying notes/i.test(label)) continue;
     const values = cells.slice(1).map((c) => clip(c.text, MAX_VALUE));
+    // MD&A tables repeat the statement as "% of revenue" below the dollar rows: that part is not a statement
+    if (rows.some((r) => !r.header) && values.length && values.every((v) => /%\)?$/.test(v))) break;
     // A row of years/dates before the first line item is the column header. Title lines above it are dropped,
     // but kept as `lead` since the units note often sits there.
     if (!rows.some((r) => !r.header) && values.length > 1 && values.every((v) => PERIOD_CELL.test(v))) {
@@ -312,7 +345,8 @@ function parseDocumentTable(tableHtml) {
     });
     if (rows.length >= MAX_ROWS) break;
   }
-  return { rows, indents, lead, periods: periodRows.length ? periodRows[periodRows.length - 1] : [] };
+  const periods = periodRows.length ? periodRows[periodRows.length - 1] : [];
+  return { rows, indents, lead, periods: groups.length ? labelPeriods(groups, periods) : periods };
 }
 
 function signature(rows) {
@@ -405,7 +439,9 @@ function findTablesInDocument(html, wanted) {
       const periodsOk = hasPeriodColumns(parsed);
       // Rank: under the statement's own heading first, then real date columns, then the most line items
       // (MD&A holds condensed copies; notes hold fair-value tables with "Total assets" rows)
-      const rank = (headingMatched ? 4 : 0) + (/consolidated/i.test(heading) ? 2 : 0) + (periodsOk ? 1 : 0);
+      // The statements themselves end with "The accompanying notes are an integral part..."; MD&A copies don't
+      const footer = /accompanying notes/i.test(cellText(html.slice(m.index + raw.length, m.index + raw.length + 6000)).slice(0, 400));
+      const rank = (headingMatched ? 4 : 0) + (/consolidated/i.test(heading) ? 2 : 0) + (periodsOk ? 1 : 0) + (footer ? 3 : 0);
       const cur = found[key];
       if (cur && (cur.rank > rank || (cur.rank === rank && cur.rowCount >= dataRows))) continue;
       const units = UNITS_RE.exec(parsed.lead.join('  '))?.[0] || UNITS_RE.exec(before.slice(-700))?.[0] || UNITS_RE.exec(cellText(raw.slice(0, 2500)))?.[0] || null;
@@ -594,9 +630,16 @@ const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7,
 
 // Fiscal year of each value column, or null for columns that are not a 12-month period
 function columnYears(statement) {
-  return (statement.periods || []).map((p) => {
-    const months = /(\d+)\s+months?\s+ended/i.exec(p);
-    if (months && Number(months[1]) !== 12) return null;
+  const periods = statement.periods || [];
+  // An interim column (a balance at June 30 next to December 31 years) is not a fiscal-year column: any dated
+  // column more than 3 weeks of the calendar away from the first column's month-day is left out
+  const mdOf = (p) => { const d = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(?:19|20)\d\d/.exec(p); return d && MONTHS[d[1].toLowerCase()] !== undefined ? MONTHS[d[1].toLowerCase()] * 30.5 + Number(d[2]) : null; };
+  const ref = periods.map(mdOf).find((v) => v !== null);
+  return periods.map((p) => {
+    const months = /(\d+|one|three|six|nine|twelve)[- ]months?\s+ended/i.exec(p);
+    if (months && (NUM_WORDS[months[1].toLowerCase()] ?? Number(months[1])) !== 12) return null;
+    const md = mdOf(p);
+    if (md !== null && ref !== undefined && ref !== null) { const gap = Math.abs(md - ref); if (Math.min(gap, 366 - gap) > 21) return null; }
     const d = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+((?:19|20)\d\d)/.exec(p);
     if (d && MONTHS[d[1].toLowerCase()] !== undefined) {
       const iso = `${d[3]}-${String(MONTHS[d[1].toLowerCase()] + 1).padStart(2, '0')}-${d[2].padStart(2, '0')}`;
@@ -833,4 +876,154 @@ export function workingCapitalFromStatement(cf) {
     if (best) out.set(fy, best);
   });
   return out;
+}
+
+// ---------- IPO prospectus (S-1 / 424B4): numbers read from the as-filed statements ----------
+// A registration statement for an IPO carries no XBRL, so SEC has no companyfacts for the company until its first
+// periodic report. These helpers turn the prospectus's own statement tables into the same facts shape buildMetrics
+// reads, by fixed label rules (not tuned to any company). Only lines whose label clearly names the figure are used.
+
+const clean = (label) => String(label || '').replace(/\s*\(\d\)\s*$/g, '').replace(/[’']/g, "'").trim();
+const PROSPECTUS_LINES = {
+  income: [
+    ['Revenues', /^(?:total )?(?:net )?(?:revenues?|sales)(?:,? net)?$/i],
+    ['CostOfRevenue', /^(?:total )?cost of (?:revenues?|sales|goods sold)$/i],
+    ['GrossProfit', /^gross (?:profit|margin)(?: \((?:loss|profit)\))?$/i],
+    ['SellingGeneralAndAdministrativeExpense', /^(?:total )?selling, general,? and administrative(?: expenses?)?$/i],
+    ['ResearchAndDevelopmentExpense', /^research and development(?: expenses?)?$/i],
+    ['CostsAndExpenses', /^total (?:operating )?(?:costs and )?expenses$/i],
+    ['OperatingIncomeLoss', /^(?:total )?(?:operating (?:income|loss|profit)(?: \((?:loss|income)\))?|(?:income|loss)(?: \((?:loss|income)\))? from operations)$/i],
+    ['InterestExpense', /^interest expense(?:, net)?$/i],
+    ['NetIncomeLoss', /^net (?:income|loss|earnings)(?: \((?:loss|income)\))?$/i],
+    ['EarningsPerShareDiluted', /per share.*diluted|diluted.*per share/i, 'perShare'],
+    ['WeightedAverageNumberOfDilutedSharesOutstanding', /^weighted[- ]average.*diluted/i, 'shares'],
+  ],
+  balance: [
+    ['CashAndCashEquivalentsAtCarryingValue', /^cash and cash equivalents$/i],
+    ['ShortTermInvestments', /^short-term investments$/i],
+    ['AccountsReceivableNetCurrent', /^accounts receivable(?:, net)?$/i],
+    ['AssetsCurrent', /^total current assets$/i],
+    ['Assets', /^total assets$/i],
+    ['LiabilitiesCurrent', /^total current liabilities$/i],
+    ['Liabilities', /^total liabilities$/i],
+    ['StockholdersEquity', /^total (?:stockholders|shareholders)'? ?(?:equity|deficit|\(deficit\) equity|equity \(deficit\))$/i],
+    ['RetainedEarningsAccumulatedDeficit', /^(?:retained earnings(?: \(accumulated deficit\))?|accumulated deficit)$/i],
+    ['LongTermDebtNoncurrent', /^(?:long-term debt|term loans?|(?:senior )?notes payable)(?:, net)?(?:, (?:noncurrent|non-current|net of current portion|less current portion))?$/i],
+    ['LongTermDebtCurrent', /^(?:current portion of long-term debt|short-term (?:debt|borrowings))$/i],
+    // Convertible notes: only recorded as "debt exists"; they are not counted as long-term debt (see the note)
+    ['ConvertibleNotesPayable', /convertible (?:promissory )?notes? payable|^convertible debt/i],
+  ],
+  cashflow: [
+    ['NetCashProvidedByUsedInOperatingActivities', /^net cash (?:provided by|used in|provided by \(used in\)|\(used in\) provided by|used in \(provided by\)) operating activities$/i],
+    ['PaymentsToAcquirePropertyPlantAndEquipment', /^(?:purchases? of|payments for|capital expenditures for) property(?:,| and) (?:plant,? and )?equipment$|^capital expenditures$/i, 'abs'],
+    ['DepreciationDepletionAndAmortization', /^depreciation(?: and amortization)?$/i, 'abs'],
+  ],
+};
+
+// Share counts are often stated in thousands while dollars are in millions ("except share amounts which are in thousands")
+function shareScaleOf(units) {
+  const u = String(units || '').toLowerCase();
+  const m = /shares?(?: amounts)?(?: which are| are)? in (thousands|millions)/.exec(u);
+  return m ? (m[1] === 'thousands' ? 1e3 : 1e6) : 1;
+}
+
+function columnEnd(period, fy) {
+  const d = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+((?:19|20)\d\d)/.exec(period || '');
+  if (d && MONTHS[d[1].toLowerCase()] !== undefined) return `${d[3]}-${String(MONTHS[d[1].toLowerCase()] + 1).padStart(2, '0')}-${d[2].padStart(2, '0')}`;
+  return `${fy}-12-31`;
+}
+
+// companyfacts-shaped object from the prospectus statements (fiscal-year columns only)
+export function factsFromStatements(statements, { filed, entityName } = {}) {
+  const facts = {};
+  const add = (tag, unit, fact) => {
+    facts[tag] = facts[tag] || { label: tag, units: {} };
+    (facts[tag].units[unit] = facts[tag].units[unit] || []).push(fact);
+  };
+  for (const key of ['income', 'balance', 'cashflow']) {
+    const st = statements[key];
+    const scale = unitScale(st?.units);
+    if (!st || scale === null) continue;
+    const years = columnYears(st);
+    const shareScale = shareScaleOf(st.units);
+    for (const [tag, re, kind] of PROSPECTUS_LINES[key]) {
+      const row = st.rows.find((r) => !r.header && r.values?.length && re.test(clean(r.label)));
+      if (!row) continue;
+      years.forEach((fy, col) => {
+        if (fy === null) return;
+        let v = parseAmount(row.values[col]);
+        if (v === null) return;
+        if (kind === 'perShare') { /* dollars per share as filed */ } else if (kind === 'shares') v *= shareScale; else v *= scale;
+        if (kind === 'abs') v = Math.abs(v);
+        const end = columnEnd(st.periods[col], fy);
+        const start = new Date(Date.parse(`${end}T00:00:00Z`) - 364 * 86400000).toISOString().slice(0, 10);
+        const fact = { val: v, end, fy, fp: 'FY', form: '10-K', filed: filed || end };
+        if (key !== 'balance') fact.start = start;
+        add(tag, kind === 'perShare' ? 'USD/shares' : kind === 'shares' ? 'shares' : 'USD', fact);
+      });
+    }
+  }
+  return { entityName, facts: { 'us-gaap': facts }, synthetic: true };
+}
+
+// Columns that are not fiscal years (six months ended June 30, a June 30 balance): the latest interim picture
+export function interimFromStatements(statements) {
+  const pick = (st, re, col, kind) => {
+    const row = st?.rows.find((r) => !r.header && r.values?.length && re.test(clean(r.label)));
+    const v = row ? parseAmount(row.values[col]) : null;
+    if (v === null) return null;
+    const scale = kind === 'perShare' ? 1 : kind === 'shares' ? shareScaleOf(st.units) : unitScale(st.units);
+    return scale === null ? null : v * scale;
+  };
+  const lines = Object.fromEntries(Object.entries(PROSPECTUS_LINES).map(([k, list]) => [k, Object.fromEntries(list.map(([tag, re, kind]) => [tag, { re, kind }]))]));
+  const columns = [];
+  for (const key of ['income', 'cashflow']) {
+    const st = statements[key];
+    if (!st) continue;
+    columnYears(st).forEach((fy, col) => {
+      if (fy !== null) return;
+      const label = st.periods[col];
+      let c = columns.find((x) => x.label === label);
+      if (!c) { c = { label }; columns.push(c); }
+      for (const [tag, { re, kind }] of Object.entries(lines[key])) {
+        const v = pick(st, re, col, kind);
+        if (v !== null) c[tag] = kind === 'abs' ? Math.abs(v) : v;
+      }
+    });
+  }
+  for (const c of columns) {
+    const ocf = c.NetCashProvidedByUsedInOperatingActivities;
+    const capex = c.PaymentsToAcquirePropertyPlantAndEquipment;
+    if (Number.isFinite(ocf) && Number.isFinite(capex)) c.fcf = ocf - capex;
+  }
+  let balance = null;
+  const bs = statements.balance;
+  if (bs) {
+    const col = columnYears(bs).findIndex((fy) => fy === null);
+    if (col >= 0) {
+      balance = { label: bs.periods[col] };
+      for (const [tag, { re, kind }] of Object.entries(lines.balance)) {
+        const v = pick(bs, re, col, kind);
+        if (v !== null) balance[tag] = v;
+      }
+    }
+  }
+  return columns.length || balance ? { columns, balance } : null;
+}
+
+// Operating expenses as filed, when the company groups costs by nature (no cost of revenue line):
+// every line between revenue and total operating expenses, per column
+export function expenseLinesFromStatement(income) {
+  if (!income) return null;
+  const scale = unitScale(income.units);
+  if (scale === null) return null;
+  const rows = income.rows;
+  if (rows.some((r) => /^(?:total )?cost of (?:revenues?|sales|goods sold)/i.test(clean(r.label)))) return null;
+  const revAt = rows.findIndex((r) => !r.header && PROSPECTUS_LINES.income[0][1].test(clean(r.label)));
+  const endAt = rows.findIndex((r, i) => i > revAt && !r.header && (/^total (?:operating )?(?:costs and )?expenses$/i.test(clean(r.label)) || PROSPECTUS_LINES.income[6][1].test(clean(r.label))));
+  if (revAt < 0 || endAt < 0) return null;
+  const amounts = (r) => r.values.map((v) => { const n = parseAmount(v); return n === null ? null : n * scale; });
+  const lines = rows.slice(revAt + 1, endAt).filter((r) => !r.header && r.values?.length).map((r) => ({ label: clean(r.label), values: amounts(r) }));
+  if (lines.length < 2) return null;
+  return { periods: income.periods, years: columnYears(income), revenue: amounts(rows[revAt]), total: amounts(rows[endAt]), totalLabel: clean(rows[endAt].label), lines };
 }

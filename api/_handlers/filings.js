@@ -1,7 +1,7 @@
 import sql from '../_db.js';
 import { requireAuth } from '../_auth.js';
-import { loadStatements, capexFromStatement, workingCapitalFromStatement, incomeFromStatement, gainEvidenceFromStatements } from '../_statements.js';
-import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, DATA_VERSION } from '../_sec.js';
+import { loadStatements, capexFromStatement, workingCapitalFromStatement, incomeFromStatement, gainEvidenceFromStatements, factsFromStatements, interimFromStatements, expenseLinesFromStatement } from '../_statements.js';
+import { resolveInput, fetchCompanyFacts, buildMetrics, findLatestAnnualFiling, findLatestProspectus, DATA_VERSION } from '../_sec.js';
 
 const USER_ID = 'local';
 const CACHE_MS = 7 * 24 * 3600 * 1000;
@@ -91,11 +91,9 @@ export default async function handler(req, res) {
       }
     }
 
-    const facts = await fetchCompanyFacts(target.cik);
+    let facts = await fetchCompanyFacts(target.cik);
     let metrics = facts ? buildMetrics(facts) : null;
-    if (!metrics) {
-      return res.status(404).json({ error: 'No XBRL financial data available for this company' });
-    }
+    let prospectus = null;
 
     // Latest annual filing, for the header links and the as-filed fallbacks. A failure here never blocks the metrics.
     let filing = null;
@@ -105,9 +103,63 @@ export default async function handler(req, res) {
       console.error('latest filing lookup failed:', err);
     }
 
+    // No annual XBRL data (a new IPO: registration statements carry no XBRL, and no 10-K is filed yet): read the
+    // numbers from the IPO prospectus's own statements. A 10-K, once filed, takes over automatically.
+    if (!metrics || !filing) {
+      try {
+        const pf = !metrics ? await findLatestProspectus(target.cik) : null;
+        if (pf) {
+          const { statements } = await loadStatements(target.cik, pf);
+          if (statements.income || statements.balance || statements.cashflow) {
+            facts = factsFromStatements(statements, { filed: pf.filingDate, entityName: facts?.entityName || target.title });
+            metrics = buildMetrics(facts, {
+              statementCapex: statements.cashflow ? capexFromStatement(statements.cashflow) : undefined,
+              statementIncome: statements.income ? incomeFromStatement(statements.income) : undefined,
+            });
+            if (metrics) {
+              filing = pf;
+              prospectus = { statements, filing: pf };
+            }
+          }
+        }
+      } catch (err) {
+        console.error('prospectus fallback failed:', err);
+      }
+    }
+    if (!metrics) {
+      return res.status(404).json({ error: 'No financial data found for this company: no annual XBRL data and no readable IPO prospectus' });
+    }
+
+    if (prospectus) {
+      const { statements } = prospectus;
+      metrics.source = {
+        kind: 'prospectus', form: filing.form, filingDate: filing.filingDate,
+        note: `Numbers read from the ${filing.form} filed ${filing.filingDate} (IPO prospectus). There is no 10-K yet, so SEC has no structured data for this company; the first 10-K takes over automatically.`,
+      };
+      metrics.interim = interimFromStatements(statements);
+      metrics.expenseLines = expenseLinesFromStatement(statements.income);
+      const q = metrics.quality;
+      q.cellNotes = q.cellNotes || {};
+      const noteAll = (metric, text) => { q.cellNotes[metric] = q.cellNotes[metric] || {}; for (const y of metrics.years) if (!q.cellNotes[metric][y]) q.cellNotes[metric][y] = text; };
+      if (metrics.expenseLines) {
+        const t = 'No cost of revenue line: this company reports expenses by type (see Operating expenses as filed), so gross margin and the SG&A rule cannot be computed.';
+        for (const k of ['costOfRevenue', 'grossProfit', 'grossMargin', 'sga', 'sgaPctGrossProfit']) noteAll(k, t);
+      }
+      // Before the IPO, preferred stock and convertible notes sit outside the common share count; they convert at the
+      // IPO, so per-share figures from the prospectus overstate what each post-IPO share earns
+      if (statements.balance?.rows.some((r) => /redeemable convertible preferred|convertible preferred stock|convertible (?:promissory )?notes? payable/i.test(r.label))) {
+        const t = 'Pre-IPO share count: convertible preferred stock and convertible notes turn into common shares at the IPO, so per-share figures after the IPO will be lower than this.';
+        for (const k of ['dilutedShares', 'epsDiluted', 'fcfPerShare']) noteAll(k, t);
+      }
+      if (statements.balance?.rows.some((r) => /convertible (?:promissory )?notes? payable|^convertible debt/i.test(r.label))) {
+        noteAll('longTermDebt', 'Convertible notes are not counted as long-term debt: they convert to stock at the IPO. They are included in total liabilities as filed.');
+        q.summary = [...(q.summary || []), 'convertible notes are excluded from long-term debt (they convert to stock at the IPO)'];
+      }
+    }
+
     // Capex missing or not from a single tag, or a big operating-cash-flow swing: read the as-filed cash flow
     // statement (cached per filing) and rebuild with what it shows.
-    if (filing && needsStatement(metrics)) {
+    if (filing && !prospectus && needsStatement(metrics)) {
       try {
         const { statements } = await loadStatements(target.cik, filing);
         if (statements.cashflow || statements.income) {

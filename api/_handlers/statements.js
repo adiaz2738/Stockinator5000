@@ -1,5 +1,5 @@
 import { requireAuth } from '../_auth.js';
-import { findLatestAnnualFiling } from '../_sec.js';
+import { findLatestAnnualFiling, findLatestProspectus } from '../_sec.js';
 import { loadStatements } from '../_statements.js';
 
 const CIK_RE = /^\d{1,10}$/;
@@ -29,8 +29,9 @@ export default async function handler(req, res) {
   const cik = cikParam.padStart(10, '0');
 
   try {
-    const filing = await findLatestAnnualFiling(cik);
-    if (!filing) return res.status(404).json({ error: 'No annual filing (10-K, 40-F, 20-F) found for this company' });
+    // A newly public company has no annual report yet: its IPO prospectus holds the statements
+    const filing = (await findLatestAnnualFiling(cik)) || (await findLatestProspectus(cik));
+    if (!filing) return res.status(404).json({ error: 'No annual filing (10-K, 40-F, 20-F) or IPO prospectus found for this company' });
     const { statements, cached } = await loadStatements(cik, filing);
     return res.status(200).json({ cik, filing: filingInfo(filing), statements, cached });
   } catch (err) {

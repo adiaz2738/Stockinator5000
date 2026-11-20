@@ -899,6 +899,16 @@ export const DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 // Most recent 10-K / 40-F / 20-F for a CIK, or null.
 export async function findLatestAnnualFiling(cik) {
+  return findLatestFiling(cik, ANNUAL_FORMS);
+}
+
+// IPO prospectus forms, newest first in SEC's list: the final prospectus (424B4) or the registration statement
+const PROSPECTUS_FORMS = new Set(['424B4', '424B1', 'S-1/A', 'S-1', 'F-1/A', 'F-1']);
+export async function findLatestProspectus(cik) {
+  return findLatestFiling(cik, PROSPECTUS_FORMS);
+}
+
+async function findLatestFiling(cik, forms) {
   if (!CIK_RE.test(cik)) throw new Error('invalid cik');
   const padded = cik.padStart(10, '0');
   const res = await secFetch(`https://data.sec.gov/submissions/CIK${padded}.json`);
@@ -906,7 +916,7 @@ export async function findLatestAnnualFiling(cik) {
   const sub = await res.json();
   const rc = sub?.filings?.recent;
   if (!rc) return null;
-  const i = rc.form.findIndex((f) => ANNUAL_FORMS.has(f));
+  const i = rc.form.findIndex((f) => forms.has(f));
   if (i < 0) return null;
   const accession = rc.accessionNumber[i];
   const primaryDocument = rc.primaryDocument[i];
@@ -914,7 +924,8 @@ export async function findLatestAnnualFiling(cik) {
   if (!ACCESSION_RE.test(accession) || !DOC_NAME_RE.test(primaryDocument || '')) return null;
   const base = `${ARCHIVES}/${parseInt(padded, 10)}/${accession.replace(/-/g, '')}`;
   return {
-    viewerUrl: `https://www.sec.gov/ix?doc=${new URL(`${base}/${primaryDocument}`).pathname}`,
+    // IPO prospectuses aren't inline XBRL, so they open as plain documents
+    viewerUrl: forms === ANNUAL_FORMS ? `https://www.sec.gov/ix?doc=${new URL(`${base}/${primaryDocument}`).pathname}` : `${base}/${primaryDocument}`,
     form: rc.form[i],
     filingDate: rc.filingDate[i],
     reportDate: rc.reportDate?.[i] || null,

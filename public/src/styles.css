@@ -976,3 +976,14 @@ a.scr-ticker:hover { color: var(--blue); text-decoration: underline; }
 /* Screener number boxes: no spinner arrows (type a value; arrow keys still step it) */
 .scr-num::-webkit-outer-spin-button, .scr-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .scr-num { -moz-appearance: textfield; appearance: textfield; }
+
+/* IPO prospectus source */
+.source-banner { margin-top: 12px; padding: 8px 12px; border: 1px solid var(--blue-dim); background: var(--blue-glow); border-radius: 8px; font-size: 12px; color: var(--text); }
+.interim-sub { margin-top: 16px; }
+
+/* Statements: year-over-year change toggle */
+.stmt-yoy-btn { margin-left: auto; background: none; border: 1px solid var(--border-hi); color: var(--text-2); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.stmt-yoy-btn.active { color: var(--blue); border-color: var(--blue); background: var(--blue-glow); }
+.stmt-yoy { font-size: 10.5px; color: var(--text-3); font-weight: 400; margin-top: 2px; }
+.stmt-yoy.up { color: var(--green); }
+.stmt-yoy.down { color: var(--red); }
