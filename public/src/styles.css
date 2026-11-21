@@ -1012,3 +1012,4 @@ table.growth-table td:not(:first-child), table.growth-table th:not(:first-child)
 .scr-search-input:focus { outline: none; border-color: var(--blue); }
 .scr-search-all { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
 tr.scr-selected td { background: var(--blue-glow); }
+table.growth-table tr.rore-row td { border-top: 1px solid var(--border-hi); }

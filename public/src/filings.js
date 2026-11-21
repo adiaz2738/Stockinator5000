@@ -134,13 +134,19 @@ function buildRules(m) {
     { label: 'Long-term debt ≤ 4 years of earnings', fmt: fmtYears, tip: `Uses total debt (long-term debt plus the current portion, when reported) divided by earnings. ${EX_GAINS_TIP}`, series: ltDebtYears },
     { label: 'Consistent EPS growth', fmt: fmtPct, series: epsGrowth, consistency: true, override: epsOverride, tip: epsOverride?.tip },
   ];
+  const buffett = [
+    { label: 'Depreciation ≤ 10% of gross profit', fmt: fmtPct, tip: 'Mary Buffett: companies with a durable advantage spend little on depreciation relative to gross profit (Coca-Cola ~6%, P&G ~8%).', series: yearly(d.depPctGrossProfit || [], (v) => v <= 0.1) },
+    { label: 'Capex ≤ 50% of net income', fmt: fmtPct, tip: 'Mary Buffett: capex under 25% of net income is excellent, under 50% is good. A loss year counts as a fail.', series: (d.capexPctNetIncome || []).map((v, i) => (isNum(v) ? { value: v, pass: v <= 0.5 } : isNum(r.netIncome[i]) && r.netIncome[i] <= 0 && isNum(r.capex[i]) ? { value: null, pass: false, note: 'Loss' } : { value: null, pass: null })) },
+    { label: 'Share count not rising', fmt: fmtPct, consistency: true, tip: 'Diluted shares flat or falling year over year in at least 75% of years. Buybacks shrink the count; heavy stock pay grows it.', series: yearly(d.sharesChange || [], (v) => v <= 0.005) },
+    { label: 'R&D % of gross profit (informational)', fmt: fmtPct, info: true, series: (d.rndPctGrossProfit || []).map((value) => ({ value: isNum(value) ? value : null, pass: null })) },
+  ];
   const optional = [
     { label: 'Operating margin (informational)', fmt: fmtPct, info: true, series: d.operatingMargin.map((value) => ({ value: isNum(value) ? value : null, pass: null })) },
     { label: 'ROE ≥ 25%', fmt: fmtPct, tip: EX_GAINS_TIP, series: yearlyEx(d.roe, d.roeExGains, (v) => v >= 0.25, m.gainStatus) },
     { label: 'Current ratio > 1', fmt: fmtRatio, series: yearly(d.currentRatio, (v) => v > 1) },
     { label: 'Retained earnings rising', fmt: (v) => fmtCompact(v, m.currency), series: reRising, consistency: true },
   ];
-  return { core, optional };
+  return { core, buffett, optional };
 }
 
 // Latest-year verdict (or consistency verdict) plus the count of passing years.
@@ -205,7 +211,7 @@ function ruleRow(rule) {
 }
 
 function scorecardCard(m) {
-  const { core, optional } = buildRules(m);
+  const { core, buffett, optional } = buildRules(m);
   const passCount = core.filter((r) => evaluate(r).pass === true).length;
   const scoredCount = core.filter((r) => evaluate(r).pass !== null).length;
 
@@ -217,6 +223,8 @@ function scorecardCard(m) {
     el('div', { class: 'score-summary mono', text: `${passCount} of ${core.length} core rules passed${scoredCount < core.length ? ` (${core.length - scoredCount} not scored: N/A)` : ''}` }),
     head,
     ...core.map(ruleRow),
+    el('div', { class: 'section-label sub', text: 'Mary Buffett Checks', attrs: { title: 'From The Interpretation of Financial Statements. Not counted in the core score.' } }),
+    ...buffett.map(ruleRow),
     el('div', { class: 'section-label sub', text: 'Optional Rules' }),
     ...optional.map(ruleRow),
   ]);
@@ -271,6 +279,12 @@ function tableCard(m) {
       ['Total debt / earnings', d.totalDebtYears, fmtYears, 'Total debt divided by reported net income'],
       ['Total debt / earnings ex-gains', d.totalDebtYearsExGains, fmtYears, 'Total debt divided by net income ex-gains. The scorecard rule uses this figure whenever it exists.'],
       ['Current ratio', d.currentRatio, fmtRatio], ['ROE', d.roe, fmtPct], ['ROE ex-gains', d.roeExGains, fmtPct, 'Net income ex-gains divided by shareholders equity'], ['EPS growth', d.epsGrowth, fmtPct, 'n/m means growth from a zero or negative EPS, which is not meaningful'],
+    ]],
+    ['Buffett Checks', [
+      ['Depreciation % of gross profit', d.depPctGrossProfit || [], fmtPct, 'Depreciation and amortization ÷ gross profit. Mary Buffett: durable businesses stay under about 10% (Coca-Cola ~6%); 25%+ means heavy reinvestment just to keep going.'],
+      ['R&D % of gross profit', d.rndPctGrossProfit || [], fmtPct, 'Research and development ÷ gross profit. High R&D means the edge has to be bought every year; low or none is what Buffett prefers.'],
+      ['Capex % of net income', d.capexPctNetIncome || [], fmtPct, 'Capital expenditures ÷ net income. Mary Buffett: under 25% is excellent, under 50% is good. N/A in loss years.'],
+      ['Diluted shares, change', d.sharesChange || [], fmtPct, 'Year-over-year change in weighted diluted shares. Falling = buybacks (a good sign in Buffett’s book); rising = dilution.'],
     ]],
   ];
 
@@ -418,11 +432,38 @@ function growthCard(m) {
     const g = Math.pow(end.v / start, 1 / span) - 1;
     return el('td', { class: g >= 0 ? 'up' : 'down', text: `${(g * 100).toFixed(1)}%`, attrs: { title: tip } });
   };
+  // Return on retained earnings (Buffett): EPS gained over the period ÷ the earnings per share kept (EPS − dividends)
+  // in the years after the start year. With no dividends per share reported in any year, the company is treated as
+  // paying none (said in the cell); with only some years missing it is N/A.
+  const eps = m.raw.epsDiluted;
+  const dps = m.raw.dividendsPerShare || [];
+  const noDividends = !dps.some(isNum);
+  const rore = (span) => {
+    const end = lastOf(m, eps);
+    if (!end) return el('td', { class: 'na', text: NA });
+    const si = m.years.indexOf(end.year - span);
+    if (si < 0 || !isNum(eps[si])) return el('td', { class: 'na', text: NA, attrs: { title: `No FY${end.year - span} EPS` } });
+    let kept = 0;
+    for (let i = si + 1; i <= end.i; i++) {
+      if (!isNum(eps[i])) return el('td', { class: 'na', text: NA, attrs: { title: `No EPS for FY${m.years[i]}` } });
+      const div = isNum(dps[i]) ? dps[i] : noDividends ? 0 : null;
+      if (div === null) return el('td', { class: 'na', text: NA, attrs: { title: `Dividends per share not reported for FY${m.years[i]}` } });
+      kept += eps[i] - div;
+    }
+    const gain = end.v - eps[si];
+    const tip = `EPS FY${end.year - span} ${fmtPerShare(c)(eps[si])} → FY${end.year} ${fmtPerShare(c)(end.v)} (gain ${fmtPerShare(c)(gain)}) ÷ earnings kept ${fmtPerShare(c)(kept)} per share${noDividends ? ' (no dividends per share reported; treated as none)' : ''}`;
+    if (!(kept > 0)) return el('td', { class: 'na', text: 'n/m', attrs: { title: `${tip}. Not meaningful when nothing was kept.` } });
+    const v = gain / kept;
+    return el('td', { class: v >= 0 ? 'up' : 'down', text: `${(v * 100).toFixed(1)}%`, attrs: { title: tip } });
+  };
   return el('div', { class: 'card' }, [
     el('div', { class: 'section-label', text: 'Growth summary (average per year)' }),
     el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table growth-table' }, [
       el('thead', {}, el('tr', {}, [el('th', { text: '' }), ...spans.map((n) => el('th', { text: `${n} yr` }))])),
-      el('tbody', {}, series.map(([label, s, fmt]) => el('tr', {}, [el('td', { text: label }), ...spans.map((n) => cell(s, fmt, n))]))),
+      el('tbody', {}, [
+        ...series.map(([label, s, fmt]) => el('tr', {}, [el('td', { text: label }), ...spans.map((n) => cell(s, fmt, n))])),
+        el('tr', { class: 'rore-row' }, [el('td', { text: 'Return on retained earnings', attrs: { title: 'Buffett’s test of management: how much EPS grew for each dollar of earnings the company kept instead of paying out. Not an average per year: the total over the period.' } }), ...spans.map(rore)]),
+      ]),
     ])),
     el('div', { class: 'head-note', text: 'Compound growth from the start year to the latest year. n/m when either end is zero or negative. Hover a cell for the values used.' }),
   ]);

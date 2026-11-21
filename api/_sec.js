@@ -402,7 +402,7 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 9; // 9: dividends per share, shares outstanding, book value per share
+export const DATA_VERSION = 10; // 10: Mary Buffett ratios (depreciation, R&D, capex, share count)
 export const DATA_VERSION_PREV = 8; // 8: capex 0 when none is ever reported; operating income from revenue - total expenses
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -713,6 +713,7 @@ export function buildMetrics(facts, extra = {}) {
   const at = (key, i) => (i >= 0 ? raw[key][i] : null);
   const derived = {
     grossMargin: [], netMargin: [], operatingMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
+    depPctGrossProfit: [], rndPctGrossProfit: [], capexPctNetIncome: [], sharesChange: [],
     debtToEquity: [], longTermDebtYears: [], currentRatio: [], roe: [],
     fcf: [], fcfPerShare: [], bookValuePerShare: [], epsGrowth: [], netCash: [],
     totalDebt: [], totalDebtYears: [], totalDebtYearsExGains: [],
@@ -774,6 +775,15 @@ export function buildMetrics(facts, extra = {}) {
     const prevEps = i > 0 ? raw.epsDiluted[i - 1] : null;
 
     derived.grossMargin.push(round(div(gp, at('revenue', i))));
+    // Mary Buffett checks: depreciation and R&D against gross profit, capex against net income, share count trend.
+    // Only with positive gross profit / net income; otherwise N/A (a ratio to a loss means nothing).
+    derived.depPctGrossProfit.push(gp !== null && gp > 0 && at('depreciation', i) !== null ? round(Math.abs(at('depreciation', i)) / gp) : null);
+    derived.rndPctGrossProfit.push(gp !== null && gp > 0 && at('rnd', i) !== null ? round(at('rnd', i) / gp) : null);
+    const niV = at('netIncome', i);
+    derived.capexPctNetIncome.push(niV !== null && niV > 0 && at('capex', i) !== null ? round(Math.abs(at('capex', i)) / niV) : null);
+    const shNow = at('dilutedShares', i);
+    const shPrev = at('dilutedShares', i - 1);
+    derived.sharesChange.push(shNow !== null && shPrev !== null && shPrev > 0 ? round(shNow / shPrev - 1) : null);
     derived.netMargin.push(round(div(ni, at('revenue', i))));
     // Operating margin = operating income / revenue. N/A (with a reason) when either input is missing.
     const revV = at('revenue', i);
