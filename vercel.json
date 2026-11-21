@@ -57,6 +57,10 @@
       "destination": "/api/market?resource=watchlist"
     },
     {
+      "source": "/api/treasury",
+      "destination": "/api/market?resource=treasury"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

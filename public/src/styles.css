@@ -987,3 +987,20 @@ a.scr-ticker:hover { color: var(--blue); text-decoration: underline; }
 .stmt-yoy { font-size: 10.5px; color: var(--text-3); font-weight: 400; margin-top: 2px; }
 .stmt-yoy.up { color: var(--green); }
 .stmt-yoy.down { color: var(--red); }
+
+/* Filings: valuation today and growth summary */
+.val-today-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.val-today-head .section-label { margin-bottom: 0; }
+.val-today-src { font-size: 12px; color: var(--text-3); }
+.val-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .val-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.val-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; cursor: help; }
+.val-tile.warn { border-color: rgba(255,201,64,0.45); }
+.val-tile-label { font-size: 11px; color: var(--text-2); }
+.val-tile-value { font-size: 17px; color: var(--text); margin-top: 2px; }
+.val-tile-value.na { color: var(--text-3); }
+.val-tile-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.val-tile-sub.bad { color: var(--red); }
+table.growth-table td.up { color: var(--green); }
+table.growth-table td.down { color: var(--red); }
+table.growth-table td:not(:first-child), table.growth-table th:not(:first-child) { text-align: right; font-family: var(--mono); }

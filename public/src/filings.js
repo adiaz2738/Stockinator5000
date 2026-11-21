@@ -241,6 +241,7 @@ function tableCard(m) {
       ['Net income', r.netIncome, money],
       ['Net income ex-gains', d.netIncomeExGains, money, 'Net income minus the gain on asset sales. Simple subtraction, no tax adjustment. N/A when no gain or loss figure was found for the year.'],
       ['EPS (diluted)', r.epsDiluted, fmtPerShare(c)],
+      ['Dividends / share', r.dividendsPerShare || [], fmtPerShare(c), 'Common dividends declared (or paid) per share, as tagged by the company'],
       ['Diluted shares', r.dilutedShares, fmtShares],
     ]],
     ['Balance Sheet', [
@@ -254,6 +255,7 @@ function tableCard(m) {
       ['Current portion of long-term debt', r.currentDebt, money, 'Debt due within a year, as tagged by the company'],
       ['Total debt', d.totalDebt, money, 'Long-term debt plus the current portion. If the current portion is not reported for a year, total debt equals long-term debt only (the cell says so).'],
       ['Retained earnings', r.retainedEarnings, money],
+      ['Book value / share', d.bookValuePerShare || [], fmtPerShare(c), "Shareholders' equity ÷ year-end shares outstanding (weighted diluted shares when the year-end count isn't reported)"],
       ['Net receivables', r.netReceivables, money],
     ]],
     ['Cash Flow', [
@@ -312,6 +314,117 @@ function tableCard(m) {
   return el('div', { class: 'card' }, [
     el('div', { class: 'section-label', text: `10-Year Financials (${c || 'USD'})` }),
     el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table' }, [thead, tbody])),
+  ]);
+}
+
+// ---------- Valuation today and growth summary ----------
+
+// Latest value of a series and its fiscal year
+function lastOf(m, series) {
+  for (let i = m.years.length - 1; i >= 0; i--) if (isNum(series?.[i])) return { v: series[i], year: m.years[i], i };
+  return null;
+}
+
+let treasuryPromise = null;
+function treasuryRate() {
+  if (!treasuryPromise) treasuryPromise = fetch('/api/treasury').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return treasuryPromise;
+}
+
+// Today's price (Schwab) against the latest fiscal year's figures. Same definitions as the Screener.
+function valuationCard(data) {
+  const m = data.metrics;
+  const ticker = String(data.ticker || '').toUpperCase();
+  const c = m.currency;
+  const card = el('div', { class: 'card val-today' });
+  const head = el('div', { class: 'val-today-head' }, [el('div', { class: 'section-label', text: 'Valuation today' }), el('span', { class: 'val-today-src', text: ticker ? 'Loading price…' : 'No ticker' })]);
+  const grid = el('div', { class: 'val-tiles' });
+  card.append(head, grid);
+  if (!ticker) return card;
+  const preIpo = m.source?.kind === 'prospectus';
+  const tile = (label, value, tip, { warn = false, sub = null, bad = false } = {}) => el('div', { class: `val-tile${warn ? ' warn' : ''}`, attrs: { title: tip } }, [
+    el('div', { class: 'val-tile-label', text: label }),
+    el('div', { class: `val-tile-value mono${value === NA ? ' na' : ''}`, text: value }),
+    ...(sub ? [el('div', { class: `val-tile-sub${bad ? ' bad' : ''}`, text: sub })] : []),
+  ]);
+  const ratio = (v) => (isNum(v) ? v.toFixed(1) : NA);
+  const pct = (v) => (isNum(v) ? `${(v * 100).toFixed(1)}%` : NA);
+  Promise.all([
+    fetch(`/api/schwab/quotes?symbols=${encodeURIComponent(ticker)}`).then(async (r) => (r.ok ? r.json() : { status: r.status })).catch(() => null),
+    treasuryRate(),
+  ]).then(([q, tsy]) => {
+    const price = q?.quotes?.[ticker]?.last ?? q?.quotes?.[ticker]?.prevClose ?? null;
+    if (!isNum(price)) {
+      head.lastChild.textContent = q?.status === 409 ? 'Connect Schwab to see valuation ratios' : 'Price unavailable right now';
+      return;
+    }
+    const sharesOut = lastOf(m, m.raw.sharesOutstanding) || lastOf(m, m.raw.dilutedShares);
+    const eps = lastOf(m, m.raw.epsDiluted);
+    const rev = lastOf(m, m.raw.revenue);
+    const eq = lastOf(m, m.raw.equity);
+    const fcf = lastOf(m, m.derived.fcf);
+    const ebit = lastOf(m, m.raw.operatingIncome);
+    const cash = lastOf(m, m.raw.cash);
+    const dps = lastOf(m, m.raw.dividendsPerShare);
+    const n = m.years.length - 1;
+    const debtV = isNum(m.derived.totalDebt?.[n]) ? m.derived.totalDebt[n] : m.debt?.noDebtYears?.[n] ? 0 : null;
+    const mcap = sharesOut && sharesOut.v > 0 ? price * sharesOut.v : null;
+    const ev = isNum(mcap) && debtV !== null && cash ? mcap + debtV - cash.v : null;
+    const fy = eps?.year || rev?.year || m.years[n];
+    head.lastChild.textContent = `Price ${fmtPerShare(c)(price)} · Schwab · FY${fy} figures`;
+    const ipoTip = preIpo ? ' Pre-IPO share count: preferred stock and convertible notes convert at the IPO, so this is not reliable until the first 10-Q.' : '';
+    const ey = eps && eps.v > 0 ? eps.v / price : null;
+    const tsyRate = isNum(tsy?.rate) ? tsy.rate / 100 : null;
+    grid.replaceChildren(
+      tile('Market cap', isNum(mcap) ? fmtCompact(mcap, c) : NA, `Price × ${m.raw.sharesOutstanding && lastOf(m, m.raw.sharesOutstanding) ? 'year-end shares outstanding' : 'weighted diluted shares'} (FY${sharesOut?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('Enterprise value', isNum(ev) ? fmtCompact(ev, c) : NA, `Market cap + total debt − cash and cash equivalents (FY${fy}). N/A when debt or cash isn't reported.${ipoTip}`, { warn: preIpo }),
+      tile('P/E', eps ? (eps.v > 0 ? ratio(price / eps.v) : 'loss') : NA, `Price ÷ diluted EPS (FY${eps?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('P/B', eq && isNum(mcap) ? (eq.v > 0 ? ratio(mcap / eq.v) : 'neg. equity') : NA, `Market cap ÷ shareholders' equity (FY${eq?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('P/S', rev && isNum(mcap) && rev.v > 0 ? ratio(mcap / rev.v) : NA, `Market cap ÷ revenue (FY${rev?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('Price / FCF', fcf && isNum(mcap) ? (fcf.v > 0 ? ratio(mcap / fcf.v) : 'neg. FCF') : NA, `Market cap ÷ free cash flow (FY${fcf?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('EV / EBIT', ebit && isNum(ev) ? (ebit.v > 0 ? ratio(ev / ebit.v) : 'neg. EBIT') : NA, `Enterprise value ÷ operating income (FY${ebit?.year ?? '?'}).${ipoTip}`, { warn: preIpo }),
+      tile('FCF yield', fcf && isNum(mcap) && mcap > 0 ? pct(fcf.v / mcap) : NA, `Free cash flow ÷ market cap (FY${fcf?.year ?? '?'}). Compare with a bond yield.${ipoTip}`, { warn: preIpo }),
+      tile('Dividend yield', dps ? pct(dps.v / price) : NA, dps ? `Dividends per share (FY${dps.year}) ÷ price` : 'No dividends per share reported in the filings (the company may pay none)', {}),
+      tile('Earnings yield', isNum(ey) ? pct(ey) : eps ? 'loss' : NA, `Diluted EPS ÷ price: what the business earns per dollar of price. Buffett compares it with the 10-year Treasury.${ipoTip}`, {
+        warn: preIpo,
+        sub: tsyRate !== null ? `10-yr Treasury ${(tsyRate * 100).toFixed(2)}%` : '10-yr Treasury unavailable',
+        bad: isNum(ey) && tsyRate !== null && ey < tsyRate,
+      }),
+    );
+  });
+  return card;
+}
+
+// Average yearly growth (CAGR) over 3, 5 and 10 years, ending at the latest year with a value
+function growthCard(m) {
+  const c = m.currency;
+  const series = [
+    ['Revenue', m.raw.revenue, (v) => fmtCompact(v, c)],
+    ['EPS (diluted)', m.raw.epsDiluted, fmtPerShare(c)],
+    ['Book value / share', m.derived.bookValuePerShare, fmtPerShare(c)],
+    ['Free cash flow', m.derived.fcf, (v) => fmtCompact(v, c)],
+    ['Dividends / share', m.raw.dividendsPerShare, fmtPerShare(c)],
+  ].filter(([, s]) => Array.isArray(s) && s.some(isNum));
+  if (!series.length) return null;
+  const spans = [3, 5, 10];
+  const cell = (s, fmt, span) => {
+    const end = lastOf(m, s);
+    if (!end) return el('td', { class: 'na', text: NA });
+    const si = m.years.indexOf(end.year - span);
+    const start = si >= 0 && isNum(s[si]) ? s[si] : null;
+    if (start === null) return el('td', { class: 'na', text: NA, attrs: { title: `No FY${end.year - span} value` } });
+    const tip = `FY${end.year - span} ${fmt(start)} → FY${end.year} ${fmt(end.v)}`;
+    if (!(start > 0) || !(end.v > 0)) return el('td', { class: 'na', text: 'n/m', attrs: { title: `${tip}. Not meaningful with a zero or negative start or end.` } });
+    const g = Math.pow(end.v / start, 1 / span) - 1;
+    return el('td', { class: g >= 0 ? 'up' : 'down', text: `${(g * 100).toFixed(1)}%`, attrs: { title: tip } });
+  };
+  return el('div', { class: 'card' }, [
+    el('div', { class: 'section-label', text: 'Growth summary (average per year)' }),
+    el('div', { class: 'table-scroll' }, el('table', { class: 'fin-table growth-table' }, [
+      el('thead', {}, el('tr', {}, [el('th', { text: '' }), ...spans.map((n) => el('th', { text: `${n} yr` }))])),
+      el('tbody', {}, series.map(([label, s, fmt]) => el('tr', {}, [el('td', { text: label }), ...spans.map((n) => cell(s, fmt, n))]))),
+    ])),
+    el('div', { class: 'head-note', text: 'Compound growth from the start year to the latest year. n/m when either end is zero or negative. Hover a cell for the values used.' }),
   ]);
 }
 
@@ -724,6 +837,8 @@ export function renderFilings(container, { onSendToCalculator, onSendToReverse, 
           onSendToCalculator();
         },
       }),
+      valuationCard(data),
+      ...[growthCard(data.metrics)].filter(Boolean),
       priceCard(data),
       ...[interimCard(data.metrics)].filter(Boolean),
       scorecardCard(data.metrics),

@@ -182,6 +182,19 @@ const METRICS = {
     'us-gaap': ['WeightedAverageNumberOfDilutedSharesOutstanding', 'WeightedAverageNumberOfShareOutstandingBasicAndDiluted', 'WeightedAverageNumberOfSharesOutstandingBasicAndDiluted'],
     'ifrs-full': ['AdjustedWeightedAverageShares'],
   },
+  dividendsPerShare: {
+    kind: 'flow',
+    unit: 'perShare',
+    'us-gaap': ['CommonStockDividendsPerShareDeclared', 'CommonStockDividendsPerShareCashPaid'],
+    'ifrs-full': ['DividendsRecognisedAsDistributionsToOwnersPerShare'],
+  },
+  // Year-end common shares outstanding, for book value per share (weighted diluted shares are used when missing)
+  sharesOutstanding: {
+    kind: 'instant',
+    unit: 'shares',
+    'us-gaap': ['CommonStockSharesOutstanding'],
+    'ifrs-full': ['NumberOfSharesOutstanding'],
+  },
   cash: {
     kind: 'instant',
     'us-gaap': ['CashAndCashEquivalentsAtCarryingValue', 'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'],
@@ -389,7 +402,8 @@ const div = (a, b) => (a === null || b === null || b === 0 ? null : a / b);
 // the scale (McDonald's reports diluted shares as 751.8 instead of 751,800,000 from the FY2023 10-K on).
 
 // Bump when extraction logic changes so cached rows in Neon refetch.
-export const DATA_VERSION = 8; // 8: capex 0 when none is ever reported; operating income from revenue - total expenses
+export const DATA_VERSION = 9; // 9: dividends per share, shares outstanding, book value per share
+export const DATA_VERSION_PREV = 8; // 8: capex 0 when none is ever reported; operating income from revenue - total expenses
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SCALE_POWERS = [3, 6, -3, -6];
@@ -548,7 +562,7 @@ function buildQualitySummary(quality, years) {
 // Long-term debt tags that already contain the current portion, so it must not be added again
 const LTD_TAGS_INCLUDING_CURRENT = new Set(['LongTermDebt']);
 // Extracted only to support another figure, so they don't count toward "metrics found"
-const COVERAGE_EXCLUDE = new Set(['currentDebt', 'gainOnAssetSales']);
+const COVERAGE_EXCLUDE = new Set(['currentDebt', 'gainOnAssetSales', 'sharesOutstanding', 'dividendsPerShare']);
 
 // Builds the metrics document stored in Neon and returned to the client.
 // `extra` carries figures derived from the as-filed statements (see api/_statements.js):
@@ -700,7 +714,7 @@ export function buildMetrics(facts, extra = {}) {
   const derived = {
     grossMargin: [], netMargin: [], operatingMargin: [], sgaPctGrossProfit: [], interestPctOperatingIncome: [],
     debtToEquity: [], longTermDebtYears: [], currentRatio: [], roe: [],
-    fcf: [], fcfPerShare: [], epsGrowth: [], netCash: [],
+    fcf: [], fcfPerShare: [], bookValuePerShare: [], epsGrowth: [], netCash: [],
     totalDebt: [], totalDebtYears: [], totalDebtYearsExGains: [],
     operatingIncomeExGains: [], netIncomeExGains: [], netMarginExGains: [], roeExGains: [],
   };
@@ -820,6 +834,10 @@ export function buildMetrics(facts, extra = {}) {
       }
     }
     derived.fcfPerShare.push(round(fcfPerShare, 4));
+    // Book value per share: shareholders' equity ÷ year-end shares outstanding (weighted diluted shares if not reported)
+    const eqV = at('equity', i);
+    const bvShares = at('sharesOutstanding', i) ?? shares;
+    derived.bookValuePerShare.push(eqV !== null && bvShares > 0 ? round(eqV / bvShares, 4) : null);
     // Growth from a zero or negative base is "n/m" (not meaningful), not a missing value
     derived.epsGrowth.push(eps !== null && prevEps !== null
       ? (prevEps > 0 ? round((eps - prevEps) / prevEps) : 'n/m')

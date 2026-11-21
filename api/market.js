@@ -1,11 +1,12 @@
 import prices from './_handlers/prices.js';
 import ticker from './_handlers/ticker.js';
 import watchlist from './_handlers/watchlist.js';
+import treasury from './_handlers/treasury.js';
 
 // Market data: daily/intraday prices, ticker name lookup, watchlist.
 // vercel.json rewrites the old URLs (e.g. /api/prices) to /api/market?resource=<name>, so the browser code is unchanged.
 // Grouping keeps the app well under Vercel Hobby's 12-functions-per-deployment limit (every non-underscore file in api/ is one).
-const HANDLERS = { prices, ticker, watchlist };
+const HANDLERS = { prices, ticker, watchlist, treasury };
 
 export default async function handler(req, res) {
   const resource = String(req.query?.resource || '');
