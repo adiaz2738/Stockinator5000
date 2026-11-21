@@ -112,7 +112,28 @@ export function renderScreener(container, { onOpenFilings }) {
   const rulesCard = el('div', { cls: 'card scr-rules' });
   const resultsHead = el('div', { cls: 'scr-results-head' });
   const tableWrap = el('div', { cls: 'scr-table-wrap' });
-  const resultsCard = el('div', { cls: 'card scr-results' }, [resultsHead, tableWrap]);
+  // Search: ticker or company name. By default within the results; "All companies" ignores the rules and filters
+  let query = '';
+  let searchAll = false;
+  const searchInput = el('input', { cls: 'scr-search-input', attrs: { type: 'search', placeholder: 'Search ticker or company  ( / )', 'aria-label': 'Search ticker or company', autocomplete: 'off', spellcheck: 'false' } });
+  const searchAllBox = el('input', { attrs: { type: 'checkbox', 'aria-label': 'Search all companies' } });
+  let searchTimer = null;
+  searchInput.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query = searchInput.value.trim(); shown = PAGE; renderResults(); }, 150); });
+  searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { searchInput.value = ''; query = ''; renderResults(); } });
+  searchAllBox.addEventListener('change', () => { searchAll = searchAllBox.checked; shown = PAGE; renderResults(); });
+  const searchBar = el('div', { cls: 'scr-search' }, [
+    el('span', { cls: 'scr-search-icon', text: '⌕' }), searchInput,
+    el('label', { cls: 'scr-search-all', attrs: { title: 'Search every company, ignoring the rules and filters (non-passing companies are marked)' } }, [searchAllBox, el('span', { text: 'All companies' })]),
+  ]);
+  const onSlash = (e) => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    e.preventDefault();
+    searchInput.focus();
+  };
+  document.addEventListener('keydown', onSlash);
+  const resultsCard = el('div', { cls: 'card scr-results' }, [searchBar, resultsHead, tableWrap]);
   container.replaceChildren(el('div', { cls: 'scr-page' }, [topCard, el('div', { cls: 'scr-grid' }, [rulesCard, resultsCard])]));
 
   // ----- rules panel -----
@@ -370,7 +391,7 @@ export function renderScreener(container, { onOpenFilings }) {
     ])] : [];
     resultsHead.replaceChildren(
       ...bulk,
-      el('span', { cls: 'scr-count' }, [el('span', { cls: 'mono', text: headInfo.count.toLocaleString() }), el('span', { text: ` ${headInfo.count === 1 ? 'company passes' : 'companies pass'}` })]),
+      el('span', { cls: 'scr-count' }, [el('span', { cls: 'mono', text: headInfo.count.toLocaleString() }), el('span', { text: query ? ` ${headInfo.count === 1 ? 'match' : 'matches'} for “${query}”${searchAll ? ' in all companies' : ' in the results'}` : ` ${headInfo.count === 1 ? 'company passes' : 'companies pass'}` })]),
       el('span', { cls: 'scr-dim', text: 'click a value for its history · click a row to open in Filings' }),
       ...(notes.length ? [el('span', { cls: 'scr-note', text: notes.join(' · ') })] : []),
     );
@@ -392,9 +413,19 @@ export function renderScreener(container, { onOpenFilings }) {
     lastRuleItems = ruleItems;
     const f = settings.filters;
     const valuationOn = RANGE_KEYS.some((k) => f.ranges[k][0] !== null || f.ranges[k][1] !== null) || f.buyZoneOnly;
-    const items = applyFilters(ruleItems, f, infoOf);
+    let items = applyFilters(ruleItems, f, infoOf);
+    // Search narrows the list: within the results, or across every company when "All companies" is on
+    const q = query.toLowerCase();
+    if (q) {
+      const pool = searchAll ? screen(dataset.companies, settings, { all: true }) : items;
+      const qu = query.toUpperCase();
+      items = pool.filter((it) => it.row[0].startsWith(qu) || String(it.row[1]).toLowerCase().includes(q));
+      // exact ticker first, then tickers starting with the text, then name matches
+      const rank = (it) => (it.row[0] === qu ? 0 : it.row[0].startsWith(qu) ? 1 : 2);
+      items.sort((a, b) => rank(a) - rank(b));
+    }
     headInfo = { count: items.length, noPrice: valuationOn ? ruleItems.filter((it) => market.tried.has(it.row[0]) && !Number.isFinite(market.prices[it.row[0]])).length : 0 };
-    items.sort((a, b) => {
+    if (!q) items.sort((a, b) => {
       const va = sortValue(a, sortKey);
       const vb = sortValue(b, sortKey);
       if (va === null && vb === null) return 0;
@@ -416,7 +447,8 @@ export function renderScreener(container, { onOpenFilings }) {
     paintHead();
     if (!items.length) {
       const waiting = valuationOn && quotesBusy;
-      tableWrap.replaceChildren(el('div', { cls: 'empty-state', text: waiting ? 'Loading prices…' : 'No companies pass these rules and filters. Loosen a threshold, lower "Pass at least" or clear a filter.' }));
+      const msg = waiting ? 'Loading prices…' : query ? (searchAll ? `No company matches “${query}”.` : `No company in the results matches “${query}”. Tick “All companies” to search everything.`) : 'No companies pass these rules and filters. Loosen a threshold, lower "Pass at least" or clear a filter.';
+      tableWrap.replaceChildren(el('div', { cls: 'empty-state', text: msg }));
       return;
     }
 
@@ -482,7 +514,7 @@ export function renderScreener(container, { onOpenFilings }) {
         el('td', { cls: 'scr-sel' }, [box]),
         el('td', {}, [link, el('div', { cls: 'scr-name', text: name })]),
         industryCell(it.row),
-        el('td', { cls: `num ${it.counted && it.passed === it.counted ? 'up' : 'na'}`, text: it.counted ? `${it.passed}/${it.counted}` : '—' }),
+        el('td', { cls: `num ${it.qualifies === false ? 'down' : it.counted && it.passed === it.counted ? 'up' : 'na'}`, text: it.counted ? `${it.passed}/${it.counted}` : '—', attrs: it.qualifies === false ? { title: "Doesn't pass your current rules (shown because of the search)" } : {} }),
         zoneCell(m),
         el('td', { cls: `num${m.price === null ? ' na' : ''}`, text: m.price !== null ? fmtMoney(m.price) : tried ? '—' : '…' }),
         el('td', { cls: `num${m.mcap === null ? ' na' : ''}`, text: m.mcap !== null ? fmtCap(m.mcap) : tried ? '—' : '…', attrs: { title: 'Price × latest diluted share count' } }),
@@ -722,7 +754,7 @@ export function renderScreener(container, { onOpenFilings }) {
   }
   refreshBtn.addEventListener('click', refreshAll);
 
-  cleanup = () => { destroyed = true; closePopover(); document.removeEventListener('click', onDocClick); };
+  cleanup = () => { destroyed = true; closePopover(); document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onSlash); clearTimeout(searchTimer); };
   renderRules();
   paintScreens();
   loadScreens();

@@ -118,12 +118,13 @@ export const latest = (series) => {
   return null;
 };
 
-// Screens every company; returns [{ row, results: {key: status}, passed, counted }] for those that qualify
-export function screen(rows, settings) {
+// Screens every company; returns [{ row, results: {key: status}, passed, counted, qualifies }] for those that qualify.
+// With { all: true } every company is returned, scored, with qualifies false for those that don't pass (search).
+export function screen(rows, settings, { all = false } = {}) {
   const active = RULES.filter((r) => settings.rules[r.key]?.on);
   const out = [];
   // No rules on: every company (a plain screener on the industry and valuation filters)
-  if (!active.length) return rows.map((row) => ({ row, results: {}, passed: 0, counted: 0 }));
+  if (!active.length) return rows.map((row) => ({ row, results: {}, passed: 0, counted: 0, qualifies: true }));
   for (const row of rows) {
     const results = {};
     let passed = 0;
@@ -136,9 +137,8 @@ export function screen(rows, settings) {
     }
     const counted = settings.missing === 'skip' ? active.length - missing : active.length;
     // Too little reported data to judge: it must be measurable on at least 60% of the active rules (5 of 7)
-    if (counted < Math.max(1, Math.ceil(active.length * 0.6))) continue;
-    if (passed < Math.min(settings.minPass, counted)) continue;
-    out.push({ row, results, passed, counted });
+    const qualifies = counted >= Math.max(1, Math.ceil(active.length * 0.6)) && passed >= Math.min(settings.minPass, counted);
+    if (qualifies || all) out.push({ row, results, passed, counted, qualifies });
   }
   return out;
 }
