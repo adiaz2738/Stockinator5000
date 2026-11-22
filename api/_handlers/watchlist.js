@@ -1,6 +1,6 @@
 import sql from '../_db.js';
 import { requireAuth } from '../_auth.js';
-import { MARKET_BASE, SchwabNotConnected, schwabGet } from '../_schwab.js';
+import { MARKET_BASE, SchwabNotConnected, schwabGet, toSchwabSymbol } from '../_schwab.js';
 
 // Watchlist (Schwab's API has no watchlists, so the list lives here).
 //   GET    /api/watchlist            rows with the latest saved valuation per ticker and current Schwab quotes
@@ -39,15 +39,18 @@ const num = (v) => (v === null || v === undefined || v === '' ? null : Number.is
 export async function fetchQuotes(tickers) {
   if (!tickers.length) return { quotes: {}, schwab: 'ok' };
   const quotes = {};
+  // Schwab writes share classes with a slash (BRK/B); the app uses a dot (BRK.B). Ask in Schwab's form, answer in ours.
+  const toSchwab = toSchwabSymbol;
+  const back = new Map(tickers.map((t) => [toSchwab(t), t]));
   try {
     // Schwab accepts a comma-separated batch
     for (let i = 0; i < tickers.length; i += 100) {
       const batch = tickers.slice(i, i + 100);
-      const qs = new URLSearchParams({ symbols: batch.join(','), fields: 'quote,reference,fundamental' });
+      const qs = new URLSearchParams({ symbols: batch.map(toSchwab).join(','), fields: 'quote,reference,fundamental' });
       const data = await schwabGet(`${MARKET_BASE}/quotes?${qs}`);
       for (const [sym, item] of Object.entries(data || {})) {
         const q = item?.quote || {};
-        quotes[sym.toUpperCase()] = {
+        quotes[back.get(sym.toUpperCase()) || sym.toUpperCase()] = {
           last: num(q.lastPrice) ?? num(q.mark),
           prevClose: num(q.closePrice),
           changePct: num(q.netPercentChange),

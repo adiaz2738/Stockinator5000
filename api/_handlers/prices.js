@@ -1,6 +1,6 @@
 import sql from '../_db.js';
 import { requireAuth } from '../_auth.js';
-import { MARKET_BASE, SchwabNotConnected, schwabGet } from '../_schwab.js';
+import { MARKET_BASE, SchwabNotConnected, schwabGet, toSchwabSymbol } from '../_schwab.js';
 
 // GET /api/prices?ticker=AAPL                 daily OHLCV (Schwab when connected, otherwise FMP's free tier)
 // GET /api/prices?ticker=AAPL&freq=5&ext=1    intraday minute bars from Schwab (freq 1, 5, 15 or 30; ext=1 adds pre/after-hours)
@@ -54,7 +54,7 @@ async function fetchFromFmp(ticker) {
   const to = new Date();
   const from = new Date(to.getTime() - HISTORY_YEARS * 365.25 * DAY);
   const iso = (d) => d.toISOString().slice(0, 10);
-  const url = `${FMP_BASE_URL}/historical-price-eod/full?symbol=${encodeURIComponent(ticker)}&from=${iso(from)}&to=${iso(to)}&apikey=${encodeURIComponent(apiKey)}`;
+  const url = `${FMP_BASE_URL}/historical-price-eod/full?symbol=${encodeURIComponent(ticker.replace(/^([A-Z]+)[./]([A-Z])$/, '$1-$2'))}&from=${iso(from)}&to=${iso(to)}&apikey=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if ([400, 402, 403, 404].includes(res.status)) return null;
   if (!res.ok) throw new Error(`FMP price request failed with status ${res.status}`);
@@ -88,7 +88,7 @@ function normaliseSchwab(candles, daily) {
 }
 
 async function schwabHistory(ticker, params) {
-  const qs = new URLSearchParams({ symbol: ticker, ...params });
+  const qs = new URLSearchParams({ symbol: toSchwabSymbol(ticker), ...params });
   try {
     return await schwabGet(`${MARKET_BASE}/pricehistory?${qs}`);
   } catch (err) {

@@ -153,7 +153,7 @@ News context for why a stock has been moving. It is kept visually and textually 
 Order agreed Nov 20, 2026. New ideas go to "Parked" unless they block day-to-day use; real bugs are fixed right away.
 
 1. **Finish the Screener (one round):** dividend yield and 52-week range (Schwab), 5-year revenue growth rule, CSV export, Pass tooltip listing failed rules, net-margin sanity check (currency-mismatch filers)
-2. **Portfolio:** live Schwab positions plus Fidelity via CSV import, each compared with its saved DCF value and buy-below price (All-in-One D)
+2. **Portfolio:** live Schwab positions plus Fidelity via CSV import, each compared with its saved DCF value and buy-below price (All-in-One D) — **built Nov 2026, testing**: /portfolio page with totals, account chips, holdings merged by ticker with per-account lots, buy-below tags, allocation bars and a Fidelity CSV import (linked Vanguard Roth included)
 3. **Alerts, morning email and weekly auto-refresh:** Vercel cron; email when a watchlist stock is at or below its buy-below price; ~6am Pacific digest; nightly/weekly Screener refresh so Refresh data is never manual (All-in-One D/E)
 4. **Options chain view:** cash-secured puts at or below the buy-below price, ~30–45 days, liquidity filters, annualized return, earnings-date flag (All-in-One F)
 5. **Order ticket:** app builds the order, user reviews and sends (All-in-One G, Level 1); broker-side brackets after

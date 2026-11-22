@@ -232,3 +232,35 @@ export async function streamerCredentials() {
     accessToken: await getAccessToken(),
   };
 }
+
+// One Schwab account, trimmed for the browser: last 4 digits only, balances, positions sorted by market value
+const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+export function slimAccount(entry) {
+  const a = entry?.securitiesAccount || {};
+  const bal = a.currentBalances || {};
+  const number = String(a.accountNumber || '');
+  const positions = (Array.isArray(a.positions) ? a.positions : []).map((p) => ({
+    symbol: p.instrument?.symbol || null,
+    description: p.instrument?.description || null,
+    assetType: p.instrument?.assetType || null,
+    longQuantity: numOrNull(p.longQuantity),
+    shortQuantity: numOrNull(p.shortQuantity),
+    averagePrice: numOrNull(p.averagePrice),
+    marketValue: numOrNull(p.marketValue),
+    dayProfitLoss: numOrNull(p.currentDayProfitLoss),
+    dayProfitLossPct: numOrNull(p.currentDayProfitLossPercentage),
+    openProfitLoss: numOrNull(p.longOpenProfitLoss ?? p.shortOpenProfitLoss),
+  }));
+  positions.sort((x, y) => (y.marketValue ?? 0) - (x.marketValue ?? 0));
+  return {
+    last4: number ? number.slice(-4) : null, // never send the full account number to the browser
+    type: a.type || null,
+    liquidationValue: numOrNull(bal.liquidationValue) ?? numOrNull(entry?.aggregatedBalance?.liquidationValue),
+    cash: numOrNull(bal.cashBalance) ?? numOrNull(bal.totalCash) ?? numOrNull(bal.cashAvailableForTrading),
+    positions,
+  };
+}
+
+
+// Share classes: the app (and SEC) write BRK.B; Schwab writes BRK/B. Convert on the way in, map back on the way out.
+export const toSchwabSymbol = (t) => String(t || '').toUpperCase().replace(/^([A-Z]+)[.\-]([A-Z])$/, '$1/$2');

@@ -1,10 +1,11 @@
 import valuations from './_handlers/valuations.js';
 import reverse from './_handlers/reverse.js';
+import portfolio from './_handlers/portfolio.js';
 
 // Saved work: forward DCF valuations and reverse DCFs.
 // vercel.json rewrites the old URLs (e.g. /api/valuations) to /api/saved?resource=<name>, so the browser code is unchanged.
 // Grouping keeps the app well under Vercel Hobby's 12-functions-per-deployment limit (every non-underscore file in api/ is one).
-const HANDLERS = { valuations, reverse };
+const HANDLERS = { valuations, reverse, portfolio };
 
 export default async function handler(req, res) {
   const resource = String(req.query?.resource || '');

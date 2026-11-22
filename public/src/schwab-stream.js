@@ -54,9 +54,12 @@ function send(service, command, parameters) {
   ws.send(JSON.stringify({ requests: [{ requestid: String(++requestId), service, command, SchwabClientCustomerId: creds.customerId, SchwabClientCorrelId: creds.correlId, parameters }] }));
 }
 
+const toSchwab = (t) => t.replace(/^([A-Z]+)[.\-]([A-Z])$/, '$1/$2');
+const fromSchwab = (k) => [...listeners.keys()].find((s) => toSchwab(s) === k) || k;
+
 function syncSubscriptions() {
   if (!loggedIn) return;
-  const keys = [...listeners.keys()];
+  const keys = [...listeners.keys()].map(toSchwab);
   if (keys.length) send('LEVELONE_EQUITIES', 'SUBS', { keys: keys.join(','), fields: FIELDS });
   else send('LEVELONE_EQUITIES', 'UNSUBS', { keys: '' });
 }
@@ -113,7 +116,7 @@ async function connect() {
     for (const d of msg.data || []) {
       if (d.service !== 'LEVELONE_EQUITIES' || !Array.isArray(d.content)) continue;
       for (const item of d.content) {
-        const sym = item.key;
+        const sym = fromSchwab(item.key);
         if (!listeners.has(sym)) continue;
         const q = { ...(latest.get(sym) || { symbol: sym }) };
         for (const [field, name] of Object.entries(MAP)) {

@@ -7,6 +7,7 @@ import { renderCharts, disposeCharts } from './charts.js';
 import { renderSchwab, updateSchwabNav } from './schwab.js';
 import { renderWatchlist, disposeWatchlist } from './watchlist.js';
 import { renderScreener, disposeScreener } from './screener.js';
+import { renderPortfolio, disposePortfolio } from './portfolio.js';
 
 const app = document.getElementById('app');
 const loginScreen = document.getElementById('login-screen');
@@ -18,6 +19,7 @@ const tabVal = document.getElementById('tab-valuations');
 const tabCharts = document.getElementById('tab-charts');
 const tabWatch = document.getElementById('tab-watchlist');
 const tabScreener = document.getElementById('tab-screener');
+const tabPortfolio = document.getElementById('tab-portfolio');
 const schwabNav = document.getElementById('schwab-status');
 
 function setActiveTab(route) {
@@ -28,6 +30,7 @@ function setActiveTab(route) {
   tabVal.classList.toggle('active', route === '/valuations');
   tabWatch.classList.toggle('active', route === '/watchlist');
   tabScreener.classList.toggle('active', route === '/screener');
+  tabPortfolio.classList.toggle('active', route === '/portfolio');
   schwabNav.classList.toggle('active', route === '/schwab');
 }
 
@@ -40,6 +43,7 @@ function normalizeRoute() {
   if (path === '/schwab') return '/schwab';
   if (path === '/watchlist') return '/watchlist';
   if (path === '/screener') return '/screener';
+  if (path === '/portfolio') return '/portfolio';
   if (/^\/chart\/[^/]+\/?$/.test(path)) return path.replace(/\/$/, '');
   return '/calculator';
 }
@@ -68,6 +72,7 @@ function render(prefill) {
   disposeCharts();
   disposeWatchlist();
   disposeScreener();
+  disposePortfolio();
   app.classList.toggle('content-wide', route === '/screener');
 
   if (route === '/charts' || route.startsWith('/chart/')) {
@@ -78,6 +83,8 @@ function render(prefill) {
     renderCharts(app, { ticker });
   } else if (route === '/screener') {
     renderScreener(app, { onOpenFilings: (t) => navigate(`/filings?ticker=${encodeURIComponent(t)}`) });
+  } else if (route === '/portfolio') {
+    renderPortfolio(app, { onOpenFilings: (t) => navigate(`/filings?ticker=${encodeURIComponent(t)}`) });
   } else if (route === '/watchlist') {
     renderWatchlist(app, {
       onOpenFilings: (t) => navigate(`/filings?ticker=${encodeURIComponent(t)}`),
@@ -167,6 +174,7 @@ tabFilings.addEventListener('click', () => navigate('/filings'));
 tabVal.addEventListener('click', () => navigate('/valuations'));
 tabWatch.addEventListener('click', () => navigate('/watchlist'));
 tabScreener.addEventListener('click', () => navigate('/screener'));
+tabPortfolio.addEventListener('click', () => navigate('/portfolio'));
 tabCharts.addEventListener('click', () => navigate('/charts'));
 schwabNav.addEventListener('click', () => navigate('/schwab'));
 

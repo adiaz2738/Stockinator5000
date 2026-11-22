@@ -1,7 +1,7 @@
 import { requireAuth } from './_auth.js';
 import {
   AUTHORIZE_URL, TRADER_BASE, MARKET_BASE, SchwabNotConnected, schwabConfig, createOAuthState, consumeOAuthState,
-  exchangeCodeForTokens, connectionStatus, disconnect, schwabGet, streamerCredentials,
+  exchangeCodeForTokens, connectionStatus, disconnect, schwabGet, streamerCredentials, slimAccount, toSchwabSymbol
 } from './_schwab.js';
 
 // One function for every Schwab action (keeps the Vercel function count low). vercel.json rewrites
@@ -22,32 +22,6 @@ function redirect(res, location) {
   res.setHeader('Cache-Control', 'no-store');
   res.writeHead(302, { Location: location });
   res.end();
-}
-
-function slimAccount(entry) {
-  const a = entry?.securitiesAccount || {};
-  const bal = a.currentBalances || {};
-  const number = String(a.accountNumber || '');
-  const positions = (Array.isArray(a.positions) ? a.positions : []).map((p) => ({
-    symbol: p.instrument?.symbol || null,
-    description: p.instrument?.description || null,
-    assetType: p.instrument?.assetType || null,
-    longQuantity: num(p.longQuantity),
-    shortQuantity: num(p.shortQuantity),
-    averagePrice: num(p.averagePrice),
-    marketValue: num(p.marketValue),
-    dayProfitLoss: num(p.currentDayProfitLoss),
-    dayProfitLossPct: num(p.currentDayProfitLossPercentage),
-    openProfitLoss: num(p.longOpenProfitLoss ?? p.shortOpenProfitLoss),
-  }));
-  positions.sort((x, y) => (y.marketValue ?? 0) - (x.marketValue ?? 0));
-  return {
-    last4: number ? number.slice(-4) : null, // never send the full account number to the browser
-    type: a.type || null,
-    liquidationValue: num(bal.liquidationValue) ?? num(entry?.aggregatedBalance?.liquidationValue),
-    cash: num(bal.cashBalance) ?? num(bal.totalCash) ?? num(bal.cashAvailableForTrading),
-    positions,
-  };
 }
 
 export default async function handler(req, res) {
@@ -93,11 +67,12 @@ export default async function handler(req, res) {
     if (action === 'quotes' && req.method === 'GET') {
       const symbols = [...new Set(String(req.query?.symbols || '').toUpperCase().split(',').map((s) => s.trim()).filter((s) => /^[A-Z][A-Z0-9.\-\/]{0,9}$/.test(s)))].slice(0, 100);
       if (!symbols.length) return res.status(400).json({ error: 'symbols required' });
-      const data = await schwabGet(`${MARKET_BASE}/quotes?${new URLSearchParams({ symbols: symbols.join(','), fields: 'quote' })}`);
+      const back = new Map(symbols.map((t) => [toSchwabSymbol(t), t]));
+      const data = await schwabGet(`${MARKET_BASE}/quotes?${new URLSearchParams({ symbols: symbols.map(toSchwabSymbol).join(','), fields: 'quote' })}`);
       const out = {};
       for (const [sym, item] of Object.entries(data || {})) {
         const q = item?.quote || {};
-        out[sym.toUpperCase()] = {
+        out[back.get(sym.toUpperCase()) || sym.toUpperCase()] = {
           last: num(q.lastPrice), totalVolume: num(q.totalVolume), dayHigh: num(q.highPrice), dayLow: num(q.lowPrice),
           prevClose: num(q.closePrice), tradeTime: num(q.tradeTime),
         };

@@ -1,0 +1,157 @@
+import sql from '../_db.js';
+import { requireAuth } from '../_auth.js';
+import { TRADER_BASE, SchwabNotConnected, schwabGet, slimAccount } from '../_schwab.js';
+import { fetchQuotes } from './watchlist.js';
+import { parsePositionsCsv } from '../_portfolio.js';
+
+// Portfolio: live Schwab accounts plus accounts imported from a positions CSV (Fidelity, including accounts linked
+// into Fidelity from other brokers). Read-only; nothing here places orders.
+//   GET    /api/portfolio                         everything the page needs (accounts, quotes, buy-below prices)
+//   POST   /api/portfolio  { csv }                import a positions file (each account in it replaces its old snapshot)
+//   POST   /api/portfolio?action=label  { key, label }          rename an imported account
+//   POST   /api/portfolio?action=ticker { description, symbol } set the ticker for a holding the file has none for
+//   DELETE /api/portfolio?key=csv:1234            remove an imported account
+// Only the last 4 digits of an account number are stored; owner names are stripped from account names.
+
+const USER_ID = 'local';
+const TICKER_RE = /^[A-Z][A-Z0-9.\-\/]{0,9}$/;
+const MAX_CSV = 500000;
+
+async function ensureTables() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS portfolio_accounts (
+      user_id      TEXT NOT NULL DEFAULT 'local',
+      key          TEXT NOT NULL,
+      source       TEXT NOT NULL,
+      label        TEXT NOT NULL,
+      custom_label TEXT,
+      last4        TEXT,
+      linked       BOOLEAN DEFAULT FALSE,
+      cash         NUMERIC DEFAULT 0,
+      holdings     JSONB NOT NULL,
+      imported_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, key)
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS portfolio_settings (
+      user_id    TEXT PRIMARY KEY,
+      ticker_map JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `;
+}
+
+const descKey = (d) => String(d || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 120);
+
+async function tickerMap() {
+  const r = await sql`SELECT ticker_map FROM portfolio_settings WHERE user_id = ${USER_ID}`;
+  return r[0]?.ticker_map || {};
+}
+
+export default async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
+  res.setHeader('Cache-Control', 'no-store');
+  const action = String(req.query?.action || '');
+  try {
+    await ensureTables();
+
+    if (req.method === 'GET') {
+      const imported = await sql`SELECT key, source, label, custom_label, last4, linked, cash, holdings, imported_at FROM portfolio_accounts WHERE user_id = ${USER_ID} ORDER BY imported_at`;
+      const map = await tickerMap();
+      let schwab = { status: 'ok', accounts: [] };
+      try {
+        const data = await schwabGet(`${TRADER_BASE}/accounts?fields=positions`);
+        schwab.accounts = (Array.isArray(data) ? data : []).map(slimAccount);
+      } catch (err) {
+        schwab = { status: err instanceof SchwabNotConnected ? 'not_connected' : 'error', accounts: [] };
+        if (schwab.status === 'error') console.error('portfolio schwab accounts failed:', err.message);
+      }
+      const symbols = new Set();
+      for (const a of imported) for (const h of a.holdings || []) { const s = h.symbol || map[descKey(h.description)]; if (s) symbols.add(s); }
+      for (const a of schwab.accounts) for (const p of a.positions || []) if (p.symbol && TICKER_RE.test(p.symbol)) symbols.add(p.symbol);
+      const { quotes, schwab: quoteStatus } = await fetchQuotes([...symbols]);
+      let buyBelow = {};
+      let intrinsic = {};
+      try {
+        const rows = await sql`
+          SELECT DISTINCT ON (UPPER(ticker)) UPPER(ticker) AS ticker, safety_price, intrinsic_value
+          FROM valuations WHERE user_id = ${USER_ID}
+          ORDER BY UPPER(ticker), created_at DESC
+        `;
+        for (const r of rows) {
+          if (Number.isFinite(Number(r.safety_price))) buyBelow[r.ticker] = Number(r.safety_price);
+          if (Number.isFinite(Number(r.intrinsic_value))) intrinsic[r.ticker] = Number(r.intrinsic_value);
+        }
+      } catch (err) {
+        if (!/does not exist/.test(err.message)) throw err;
+      }
+      return res.status(200).json({
+        schwab,
+        imported: imported.map((a) => ({
+          key: a.key, source: a.source, label: a.custom_label || a.label, defaultLabel: a.label, last4: a.last4, linked: a.linked,
+          cash: Number(a.cash) || 0, holdings: a.holdings || [], importedAt: a.imported_at,
+        })),
+        tickerMap: map,
+        quotes,
+        quoteStatus,
+        buyBelow,
+        intrinsic,
+        fetchedAt: new Date().toISOString(),
+      });
+    }
+
+    if (req.method === 'POST' && action === 'label') {
+      const key = String(req.body?.key || '').slice(0, 80);
+      const label = String(req.body?.label || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      await sql`UPDATE portfolio_accounts SET custom_label = ${label || null} WHERE user_id = ${USER_ID} AND key = ${key}`;
+      return res.status(200).json({ ok: true });
+    }
+
+    if (req.method === 'POST' && action === 'ticker') {
+      const d = descKey(req.body?.description);
+      const symbol = String(req.body?.symbol || '').trim().toUpperCase();
+      if (!d) return res.status(400).json({ error: 'Missing holding' });
+      if (symbol && !TICKER_RE.test(symbol)) return res.status(400).json({ error: 'Enter a valid ticker' });
+      const map = await tickerMap();
+      if (symbol) map[d] = symbol; else delete map[d];
+      await sql`
+        INSERT INTO portfolio_settings (user_id, ticker_map) VALUES (${USER_ID}, ${JSON.stringify(map)}::jsonb)
+        ON CONFLICT (user_id) DO UPDATE SET ticker_map = EXCLUDED.ticker_map
+      `;
+      return res.status(200).json({ ok: true });
+    }
+
+    if (req.method === 'POST') {
+      const csv = typeof req.body?.csv === 'string' ? req.body.csv : '';
+      if (!csv) return res.status(400).json({ error: 'No file content' });
+      if (csv.length > MAX_CSV) return res.status(400).json({ error: 'That file is too large for a positions export' });
+      let parsed;
+      try {
+        parsed = parsePositionsCsv(csv);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      for (const a of parsed.accounts) {
+        await sql`
+          INSERT INTO portfolio_accounts (user_id, key, source, label, last4, linked, cash, holdings, imported_at)
+          VALUES (${USER_ID}, ${a.key}, ${a.source}, ${a.label}, ${a.last4}, ${a.linked}, ${a.cash}, ${JSON.stringify(a.holdings)}::jsonb, NOW())
+          ON CONFLICT (user_id, key) DO UPDATE SET
+            source = EXCLUDED.source, label = EXCLUDED.label, last4 = EXCLUDED.last4, linked = EXCLUDED.linked,
+            cash = EXCLUDED.cash, holdings = EXCLUDED.holdings, imported_at = NOW()
+        `;
+      }
+      return res.status(200).json({ ok: true, accounts: parsed.accounts.map((a) => ({ key: a.key, label: a.label, holdings: a.holdings.length })), skipped: parsed.skipped });
+    }
+
+    if (req.method === 'DELETE') {
+      const key = String(req.query?.key || '').slice(0, 80);
+      await sql`DELETE FROM portfolio_accounts WHERE user_id = ${USER_ID} AND key = ${key}`;
+      return res.status(200).json({ ok: true });
+    }
+
+    return res.status(405).json({ error: 'Method not allowed' });
+  } catch (err) {
+    console.error('portfolio failed:', err);
+    return res.status(502).json({ error: 'Portfolio request failed' });
+  }
+}

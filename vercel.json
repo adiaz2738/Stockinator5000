@@ -45,6 +45,10 @@
       "destination": "/api/saved?resource=reverse"
     },
     {
+      "source": "/api/portfolio",
+      "destination": "/api/saved?resource=portfolio"
+    },
+    {
       "source": "/api/prices",
       "destination": "/api/market?resource=prices"
     },
