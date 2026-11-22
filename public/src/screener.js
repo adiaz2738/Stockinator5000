@@ -1,7 +1,7 @@
 // Screener page (/screener): Buffett-style rules over the whole market (SEC frames data, refreshed on demand and
 // stored in Neon). Results update instantly as rules change. All text goes through textContent.
 
-import { RULES, FIELD_INDEX, RANGE_KEYS, BIOTECH_SICS, defaultSettings, screen, latest, evaluate, marketFigures, applyFilters, isFinancial } from './screener-rules.js';
+import { RULES, FIELD_INDEX, RANGE_KEYS, BIOTECH_SICS, defaultSettings, screen, latest, evaluate, marketFigures, applyFilters, isFinancial, cagrOf } from './screener-rules.js';
 import { addToWatchlist } from './watchlist.js';
 
 const LS_KEY = 'vl.screener.v1';
@@ -15,7 +15,7 @@ const METRIC_FRESH_MS = 20 * 3600 * 1000; // Refresh data skips metrics pulled i
 let dataset = null; // cached for the session
 let cleanup = null;
 // Prices and buy-below prices for this session: { prices: {T: n}, buyBelow: {T: n}, tried: Set, at, schwab }
-let market = { prices: {}, buyBelow: {}, tried: new Set(), at: 0, schwab: 'ok' };
+let market = { prices: {}, extra: {}, buyBelow: {}, tried: new Set(), at: 0, schwab: 'ok' };
 
 export function disposeScreener() { if (cleanup) { cleanup(); cleanup = null; } }
 
@@ -75,12 +75,14 @@ const fmtVal = (rule, v) => {
     case 'yrs': return v === 0 ? 'None' : v >= 99 ? 'no profit' : v.toFixed(1);
     case 'eps': return `$${v.toFixed(2)}`;
     case 'up': return v === 1 ? 'up' : 'down';
+    case 'cagr': return fmtCap(v); // per-year values in the history popover are revenue
     default: return String(v);
   }
 };
 // Threshold shown to the user: percentages as whole numbers ("40"), others as-is
-const toInput = (rule, v) => (rule.fmt === 'pct' ? String(Math.round(v * 1000) / 10) : String(v));
-const fromInput = (rule, s) => { const n = Number(s); return Number.isFinite(n) ? (rule.fmt === 'pct' ? n / 100 : n) : null; };
+const isPctRule = (rule) => rule.fmt === 'pct' || rule.fmt === 'cagr';
+const toInput = (rule, v) => (isPctRule(rule) ? String(Math.round(v * 1000) / 10) : String(v));
+const fromInput = (rule, s) => { const n = Number(s); return Number.isFinite(n) ? (isPctRule(rule) ? n / 100 : n) : null; };
 const fmtMoney = (v) => (v === null ? '—' : `$${v >= 1000 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2)}`);
 const fmtCap = (v) => {
   if (v === null) return '—';
@@ -89,12 +91,12 @@ const fmtCap = (v) => {
   if (v >= 1e6) return `$${Math.round(v / 1e6)}M`;
   return `$${Math.round(v / 1e3)}K`;
 };
-const unitOf = (rule) => (rule.fmt === 'pct' ? '%' : rule.fmt === 'yrs' ? 'yrs' : rule.fmt === 'x' ? '×' : '');
+const unitOf = (rule) => (isPctRule(rule) ? '%' : rule.fmt === 'yrs' ? 'yrs' : rule.fmt === 'x' ? '×' : '');
 
 export function renderScreener(container, { onOpenFilings }) {
   disposeScreener();
   // prices and buy-below prices are reloaded each visit (a valuation saved elsewhere shows up here)
-  market = { prices: {}, buyBelow: {}, tried: new Set(), at: 0, schwab: market.schwab };
+  market = { prices: {}, extra: {}, buyBelow: {}, tried: new Set(), at: 0, schwab: market.schwab };
   let destroyed = false;
   let settings = loadSettings();
   let status = null;
@@ -154,7 +156,7 @@ export function renderScreener(container, { onOpenFilings }) {
     let input = el('span');
     if (rule.def !== null) {
       input = el('span', { cls: 'scr-input-wrap' }, [
-        el('input', { cls: 'scr-num mono', attrs: { type: 'number', step: rule.fmt === 'pct' ? '1' : '0.1', value: toInput(rule, st.value), 'aria-label': `${rule.label} threshold` }, on: { input: (e) => { const v = fromInput(rule, e.target.value); if (v !== null) { st.value = v; changed(); } } } }),
+        el('input', { cls: 'scr-num mono', attrs: { type: 'number', step: isPctRule(rule) ? '1' : '0.1', value: toInput(rule, st.value), 'aria-label': `${rule.label} threshold` }, on: { input: (e) => { const v = fromInput(rule, e.target.value); if (v !== null) { st.value = v; changed(); } } } }),
         el('span', { cls: 'scr-unit', text: unitOf(rule) }),
       ]);
     }
@@ -336,7 +338,7 @@ export function renderScreener(container, { onOpenFilings }) {
   }
   async function loadQuotes(items) {
     if (quotesBusy) return;
-    if (Date.now() - market.at > QUOTE_TTL && market.at) market = { prices: {}, buyBelow: market.buyBelow, tried: new Set(), at: 0, schwab: market.schwab };
+    if (Date.now() - market.at > QUOTE_TTL && market.at) market = { prices: {}, extra: {}, buyBelow: market.buyBelow, tried: new Set(), at: 0, schwab: market.schwab };
     const todo = items.map((it) => it.row[0]).filter((t) => !market.tried.has(t)).slice(0, QUOTE_BATCH);
     if (!todo.length) return;
     quotesBusy = true;
@@ -346,6 +348,7 @@ export function renderScreener(container, { onOpenFilings }) {
       if (!res.ok) throw new Error(`quotes ${res.status}`);
       const q = await res.json();
       Object.assign(market.prices, q.prices || {});
+      Object.assign(market.extra, q.extra || {});
       market.buyBelow = q.buyBelow || {};
       market.schwab = q.schwab;
       if (!market.at) market.at = q.at || Date.now();
@@ -393,14 +396,21 @@ export function renderScreener(container, { onOpenFilings }) {
       ...bulk,
       el('span', { cls: 'scr-count' }, [el('span', { cls: 'mono', text: headInfo.count.toLocaleString() }), el('span', { text: query ? ` ${headInfo.count === 1 ? 'match' : 'matches'} for “${query}”${searchAll ? ' in all companies' : ' in the results'}` : ` ${headInfo.count === 1 ? 'company passes' : 'companies pass'}` })]),
       el('span', { cls: 'scr-dim', text: 'click a value for its history · click a row to open in Filings' }),
+      el('button', { cls: 'btn btn-ghost btn-inline scr-screen-btn scr-export', text: 'Export CSV', attrs: { type: 'button', title: 'Download every row in the current list (not just the ones shown)' }, on: { click: exportCsv } }),
       ...(notes.length ? [el('span', { cls: 'scr-note', text: notes.join(' · ') })] : []),
     );
   }
 
+  // How far the price is below its 52-week high (0 = at the high), and where it sits in the year's range
+  const offHigh = (t) => { const p = market.prices[t]; const hi = market.extra[t]?.[0]; return Number.isFinite(p) && hi > 0 ? p / hi - 1 : null; };
+  const rangePos = (t) => { const p = market.prices[t]; const [hi, lo] = market.extra[t] || []; return Number.isFinite(p) && hi > lo ? (p - lo) / (hi - lo) : null; };
   const sortValue = (item, key) => {
     if (key === 'passed') return item.counted ? item.passed / item.counted + item.passed / 100 : null;
     if (key === 'ticker') return item.row[0];
     if (key === 'industry') return industryOf(item.row)?.[1] || null;
+    if (key === 'revGrowth') return cagrOf(item.row[FIELD_INDEX.rev]);
+    if (key === 'divy') return market.extra[item.row[0]]?.[2] ?? null;
+    if (key === 'off52') return offHigh(item.row[0]);
     if (['price', 'mcap', 'pe', 'pb', 'ps', 'zoneDist'].includes(key)) { const v = figuresOf(item.row)[key]; return v !== null && v < 0 && key !== 'zoneDist' ? null : v; }
     const v = latest(item.row[FIELD_INDEX[key]]);
     return v === null ? null : v;
@@ -444,6 +454,7 @@ export function renderScreener(container, { onOpenFilings }) {
       loadQuotes(valuationOn || marketSort ? applyFilters(ruleItems, { ...f, ranges: {}, buyZoneOnly: false }, infoOf) : shownRows);
     }
     const cols = activeRules();
+    lastItems = items;
     paintHead();
     if (!items.length) {
       const waiting = valuationOn && quotesBusy;
@@ -467,6 +478,9 @@ export function renderScreener(container, { onOpenFilings }) {
       pe: 'Price / earnings: price ÷ latest full-year diluted EPS',
       pb: 'Price / book: market cap ÷ latest shareholders’ equity',
       ps: 'Price / sales: market cap ÷ latest full-year revenue',
+      off52: '52-week range: how far the price is below its 52-week high (Schwab); the bar shows where it sits between the low and the high',
+      divy: 'Dividend yield: as Schwab reports it (trailing dividends ÷ price)',
+      revGrowth: 'Revenue growth: average per year from the first to the latest year with revenue',
       gm: 'Gross margin: gross profit ÷ revenue',
       nm: 'Net margin: net income ÷ revenue',
       sga: 'SG&A: selling, general and administrative expense ÷ gross profit',
@@ -478,7 +492,7 @@ export function renderScreener(container, { onOpenFilings }) {
       cr: 'Current ratio: current assets ÷ current liabilities',
       reUp: 'Retained earnings: up year over year',
     };
-    const short = { gm: 'GM', nm: 'NM', sga: 'SG&A', int: 'Int', de: 'D/E', ltd: 'LTD yrs', eps: 'EPS', roe: 'ROE', cr: 'CR', reUp: 'RE' };
+    const short = { gm: 'GM', nm: 'NM', sga: 'SG&A', int: 'Int', de: 'D/E', ltd: 'LTD yrs', eps: 'EPS', roe: 'ROE', cr: 'CR', reUp: 'RE', revGrowth: 'Rev/yr' };
     const table = el('table', { cls: 'val-table scr-table' });
     const visible = items.slice(0, shown);
     const allBox = el('input', { attrs: { type: 'checkbox', 'aria-label': 'Select all shown', title: 'Select all shown' } });
@@ -488,7 +502,7 @@ export function renderScreener(container, { onOpenFilings }) {
     table.append(el('thead', {}, [el('tr', {}, [
       el('th', { cls: 'scr-sel' }, [allBox]),
       headCell('Company', 'ticker', false), headCell('Industry', 'industry', false), headCell('Pass', 'passed'),
-      headCell('Buy zone', 'zoneDist', false), headCell('Price', 'price'), headCell('Mkt cap', 'mcap'), headCell('P/E', 'pe'), headCell('P/B', 'pb'), headCell('P/S', 'ps'),
+      headCell('Buy zone', 'zoneDist', false), headCell('Price', 'price'), headCell('52-wk', 'off52'), headCell('Mkt cap', 'mcap'), headCell('P/E', 'pe'), headCell('P/B', 'pb'), headCell('P/S', 'ps'), headCell('Div yld', 'divy'),
       ...cols.map((r) => headCell(short[r.key], r.key)), el('th', { text: '' }),
     ])]));
     const body = el('tbody');
@@ -514,18 +528,21 @@ export function renderScreener(container, { onOpenFilings }) {
         el('td', { cls: 'scr-sel' }, [box]),
         el('td', {}, [link, el('div', { cls: 'scr-name', text: name })]),
         industryCell(it.row),
-        el('td', { cls: `num ${it.qualifies === false ? 'down' : it.counted && it.passed === it.counted ? 'up' : 'na'}`, text: it.counted ? `${it.passed}/${it.counted}` : '—', attrs: it.qualifies === false ? { title: "Doesn't pass your current rules (shown because of the search)" } : {} }),
+        el('td', { cls: `num ${it.qualifies === false ? 'down' : it.counted && it.passed === it.counted ? 'up' : 'na'}`, text: it.counted ? `${it.passed}/${it.counted}` : '—', attrs: { title: passTip(it) } }),
         zoneCell(m),
         el('td', { cls: `num${m.price === null ? ' na' : ''}`, text: m.price !== null ? fmtMoney(m.price) : tried ? '—' : '…' }),
+        rangeCell(ticker, tried),
         el('td', { cls: `num${m.mcap === null ? ' na' : ''}`, text: m.mcap !== null ? fmtCap(m.mcap) : tried ? '—' : '…', attrs: { title: 'Price × latest diluted share count' } }),
         el('td', { cls: `num${m.pe === null || m.pe < 0 ? ' na' : ''}`, text: m.pe !== null && m.pe < 0 ? 'loss' : ratio(m.pe), attrs: { title: 'Price ÷ latest full-year diluted EPS' } }),
         el('td', { cls: `num${m.pb === null || m.pb < 0 ? ' na' : ''}`, text: ratio(m.pb), attrs: { title: 'Market cap ÷ latest shareholders’ equity (neg. = negative equity)' } }),
         el('td', { cls: `num${m.ps === null ? ' na' : ''}`, text: ratio(m.ps), attrs: { title: 'Market cap ÷ latest full-year revenue' } }),
+        (() => { const y = market.extra[ticker]?.[2]; return el('td', { cls: `num${Number.isFinite(y) ? '' : ' na'}`, text: Number.isFinite(y) ? `${y.toFixed(2)}%` : tried ? '—' : '…' }); })(),
       );
       for (const rule of cols) {
         const st = it.results[rule.key];
         const series = it.row[FIELD_INDEX[rule.key]];
-        const td = el('td', { cls: `num scr-cell ${st === 'pass' ? 'up' : st === 'fail' ? 'down' : 'na'}`, text: rule.op === 'noloss' ? (st === 'pass' ? '✓' : st === 'fail' ? '✗' : 'N/A') : fmtVal(rule, latest(series)) });
+        const cellText = rule.op === 'noloss' ? (st === 'pass' ? '✓' : st === 'fail' ? '✗' : 'N/A') : rule.op === 'cagr' ? (cagrOf(series) === null ? 'N/A' : `${(cagrOf(series) * 100).toFixed(1)}%`) : fmtVal(rule, latest(series));
+        const td = el('td', { cls: `num scr-cell ${st === 'pass' ? 'up' : st === 'fail' ? 'down' : 'na'}`, text: cellText });
         td.addEventListener('click', (e) => { e.stopPropagation(); openPopover(td, ticker, rule, series); });
         tr.append(td);
       }
@@ -547,6 +564,56 @@ export function renderScreener(container, { onOpenFilings }) {
     tableWrap.replaceChildren(...nodes);
   }
 
+  // CSV of the current list (all rows, current order). Numbers are raw (percentages as percent), blanks for N/A.
+  let lastItems = [];
+  function exportCsv() {
+    const cols = RULES.filter((r) => settings.rules[r.key].on);
+    const q = (v) => { const t = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const n = (v, d = 4) => (Number.isFinite(v) ? Number(v.toFixed(d)) : '');
+    const head = ['Ticker', 'Company', 'Industry', 'Rules passed', 'Rules measured', 'Price', '% below 52-wk high', 'Market cap', 'P/E', 'P/B', 'P/S', 'Dividend yield %', 'Buy-below', ...cols.map((r) => (isPctRule(r) ? `${r.label} %` : r.label))];
+    const lines = [head.map(q).join(',')];
+    for (const it of lastItems) {
+      const [ticker, name] = it.row;
+      const m = figuresOf(it.row);
+      const ruleVals = cols.map((r) => {
+        const series = it.row[FIELD_INDEX[r.key]];
+        if (r.op === 'noloss') return it.results[r.key] === 'pass' ? 'yes' : it.results[r.key] === 'fail' ? 'no' : '';
+        if (r.op === 'cagr') { const g = cagrOf(series); return g === null ? '' : n(g * 100, 2); }
+        const v = latest(series);
+        return v === null ? '' : isPctRule(r) ? n(v * 100, 2) : n(v, 4);
+      });
+      const off = offHigh(ticker);
+      lines.push([ticker, name, industryOf(it.row)?.[1] || '', it.passed, it.counted, n(m.price, 2), off === null ? '' : n(off * -100, 2), n(m.mcap, 0), m.pe > 0 ? n(m.pe, 2) : '', m.pb > 0 ? n(m.pb, 2) : '', n(m.ps, 2), n(market.extra[ticker]?.[2], 2), n(m.buyBelow, 2), ...ruleVals].map(q).join(','));
+    }
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `screener-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  // Pass cell tooltip: which active rules failed or had no data
+  function passTip(it) {
+    if (!it.counted) return 'No rules are on';
+    const names = (st) => RULES.filter((r) => it.results[r.key] === st).map((r) => r.label);
+    const failed = names('fail');
+    const missing = names('missing');
+    const lines = [`Passed ${it.passed} of ${it.counted} measurable rules`];
+    if (failed.length) lines.push(`Failed: ${failed.join(', ')}`);
+    if (missing.length) lines.push(`No data: ${missing.join(', ')}`);
+    if (it.qualifies === false) lines.push("Doesn't pass your current settings (shown because of the search)");
+    return lines.join('\n');
+  }
+  function rangeCell(t, tried) {
+    const off = offHigh(t);
+    const pos = rangePos(t);
+    if (off === null) return el('td', { cls: 'num na', text: tried ? '—' : '…' });
+    const [hi, lo] = market.extra[t];
+    const bar = el('div', { cls: 'scr-range-bar' }, [el('div', { cls: 'scr-range-dot', attrs: { style: `left:${Math.round(Math.max(0, Math.min(1, pos ?? 0)) * 100)}%` } })]);
+    return el('td', { cls: 'num scr-range-cell', attrs: { title: `52-week low ${fmtMoney(lo)} · high ${fmtMoney(hi)}` } }, [el('div', { text: off >= -0.0005 ? 'at high' : `${(off * 100).toFixed(1)}%` }), bar]);
+  }
   function industryCell(row) {
     const ind = industryOf(row);
     const text = ind ? (ind[1] || 'Unclassified') : industryTried.has(row[2]) ? '—' : '…';

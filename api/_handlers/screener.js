@@ -235,6 +235,8 @@ async function build() {
       break;
     }
     // A gross margin above 100% is impossible: a currency or tag mismatch, so it's left out rather than shown
+    // Net margin: dropped in the same years (the same mismatch distorts it), and above 200% (no real business)
+    ratios.nm = ratios.nm.map((v, i) => (v !== null && ((ratios.gm[i] !== null && ratios.gm[i] > 1) || v > 2) ? null : v));
     ratios.gm = ratios.gm.map((v) => (v !== null && v > 1 ? null : v));
     companies.push([info.ticker, info.title, cik, ...fields.map((f) => ratios[f])]);
   }
@@ -302,7 +304,12 @@ async function quotesAndBuyBelow(tickers) {
   const list = [...new Set(tickers.map((t) => String(t).trim().toUpperCase()).filter((t) => TICKER_RE.test(t)))].slice(0, QUOTE_BATCH);
   const { quotes, schwab } = await fetchQuotes(list);
   const prices = {};
-  for (const t of list) if (Number.isFinite(quotes[t]?.last)) prices[t] = quotes[t].last;
+  const extra = {}; // ticker -> [52-week high, 52-week low, dividend yield %]
+  for (const t of list) {
+    const q = quotes[t];
+    if (Number.isFinite(q?.last)) prices[t] = q.last;
+    if (q && (Number.isFinite(q.high52) || Number.isFinite(q.divYield))) extra[t] = [q.high52 ?? null, q.low52 ?? null, q.divYield ?? null];
+  }
   let buyBelow = {};
   try {
     const rows = await sql`
@@ -314,7 +321,7 @@ async function quotesAndBuyBelow(tickers) {
   } catch (err) {
     if (!/does not exist/.test(err.message)) throw err; // no valuations saved yet
   }
-  return { prices, buyBelow, schwab, at: Date.now() };
+  return { prices, extra, buyBelow, schwab, at: Date.now() };
 }
 
 // ---------- Saved screens ----------

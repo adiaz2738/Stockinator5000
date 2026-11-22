@@ -14,7 +14,7 @@ This is a research tool — no payments flow through it. It is initially single-
 
 - **Buffett-style value investing**: moat analysis, consistent earnings, low debt, high margins, DCF-based intrinsic value
 - **Learning as you build**: the app should make the math visible and educational, not just produce an answer
-- **Replaces**: Excel/Google Sheets for DCF calculations, Morningstar/Macrotrends for historical data, Finviz for screening (screening across companies is still ahead), and — planned — everyday charting in thinkorswim/TradingView
+- **Replaces**: Excel/Google Sheets for DCF calculations, Morningstar/Macrotrends for historical data, Finviz for screening (full-market screener built), and everyday charting in thinkorswim/TradingView (prototype built)
 - **All-in-one goal (added Nov 2026)**: minimize the number of sites, apps and tabs needed day to day. Research, charts, screening, portfolio, options and (eventually) order entry in one place, with only the everyday features actually used — no bloat
 - **Compounding investment**: building the tool reinforces what's being learned about investing
 - **Never fabricate a number**: if a figure can't be found in the source data, the app shows N/A. AI-written text is always labeled as AI-generated and separated into fact vs. interpretation
@@ -46,9 +46,12 @@ This is a research tool — no payments flow through it. It is initially single-
 | **News sub-tab** | **Done.** "Why is the stock moving": web-search news context plus recent 8-K/6-K filings, labeled amber "NEWS CONTEXT, NOT FROM FILINGS" |
 | Auth | **Single-user login done** (username/password, signed session cookie, DB-backed lockout). Multi-user auth (Clerk) not built; `user_id` is still the hardcoded `'local'` |
 | **Screener** (Round A) | **Done.** `/screener` page + `api/_handlers/screener.js` (served by `company.js`, URL `/api/screener`). Data from SEC XBRL frames (one line item for every filer per calendar year; 14 metrics × tag fallbacks × 5 years), refreshed on demand one metric per call with a progress bar, stored in `screener_metrics`, compacted into `screener_dataset` (ratios per company per year). Rules engine in `public/src/screener-rules.js`: 7 core + 3 optional rules with editable thresholds, "pass at least N", missing data skip/fail, "rule must hold N of 5 years"; must be measurable on 60% of active rules. Results sortable, value history popup, row opens Filings, + watchlist. |
-| **Filings valuation and growth** | **Done.** "Valuation today" tiles (market cap, EV, P/E, P/B, P/S, P/FCF, EV/EBIT, FCF yield, dividend yield, earnings yield vs. the 10-year Treasury from `/api/treasury`, cached daily) from the Schwab price and the latest fiscal year; growth summary (3/5/10-year CAGR of revenue, EPS, book value per share, FCF, dividends per share). New metrics: dividends per share, shares outstanding, book value per share. Next: Mary Buffett rows (D&A and R&D % of gross profit, capex % of net income, share count trend, return on retained earnings), then ROIC, owner earnings, SBC % of revenue. |
+| **Filings valuation and growth** | **Done.** "Valuation today" tiles (market cap, EV, P/E, P/B, P/S, P/FCF, EV/EBIT, FCF yield, dividend yield, earnings yield vs. the 10-year Treasury from `/api/treasury`, cached daily) from the Schwab price and the latest fiscal year; growth summary (3/5/10-year CAGR of revenue, EPS, book value per share, FCF, dividends per share). New metrics: dividends per share, shares outstanding, book value per share. |
 | **IPO companies** (S-1 / 424B4) | **Done.** No annual XBRL yet (IPO registration statements carry none): Filings reads the IPO prospectus's own statement tables (`findLatestProspectus`, `factsFromStatements` in `_statements.js`) into the same metrics pipeline. Yearly columns go to the 10-year table; six-month columns and the interim balance sheet show in a "Latest interim results" card. Companies that group expenses by type (no cost of revenue) get an "Operating expenses as filed" card with % of revenue; gross margin and SG&A rules stay N/A with a note. Convertible notes are kept out of long-term debt (they convert at the IPO); per-share figures carry a pre-IPO share-count note. The first 10-K takes over automatically. Story tab still needs 10-K headings (S-1 support later). |
 | **Screener** (Round B) | **Done.** Industry from each company's SEC SIC code, looked up only for companies that pass the rules and cached in `screener_industry`; toggles to exclude biotech/pharma (2833–2836, 8731) and banks/insurers/asset managers (6000–6499, 6700–6799 except REITs), both off by default, plus "only this industry". Price from Schwab for the result set; market cap = price × latest diluted shares (new `shares` metric); P/E = price ÷ latest full-year diluted EPS; filters for market cap, P/E, price and buy zone only. Buy zone tag vs. the latest saved valuation's buy-below price. Saved screens in `screener_screens`. Refresh data skips metrics pulled in the last 20 hours. Next: weekly auto-refresh with the alerts cron |
+| **Filings Buffett checks** | **Done.** 10-year rows and a scorecard section (not counted in the core score): depreciation % of gross profit (≤10%), R&D % of gross profit (informational), capex % of net income (≤50%), diluted share count change (not rising in 75% of years); return on retained earnings (3/5/10 yr) in the growth summary |
+| **Statements tab** | **Done.** As-filed balance sheet, income statement and cash flow as separate tabs, matching the 10-K layout (document tables replace segment-split R pages); newest periods first; YoY % toggle (same period a year earlier) |
+| **Screener** (Round C) | **Done.** Ranges (min–max) for market cap, P/E, P/B, P/S and price; multi-select add to watchlist; ticker links open in a new tab; plain-screener mode (rules All/None); industry picker (multi-select, only/exclude, biotech and financials presets) with full-market industry lookup during Refresh; browser-cached dataset; column header help; search by ticker or name (within results or all companies); share-count and gross-margin sanity checks; faster parallel refresh with visible errors and build logging |
 | **Charts** (All-in-One B) | **Prototype done.** KLineChart 10.1.0, full-viewport Charts page and interactive Price card on Filings (in-place expand/minimize), drawing tools, EMA/SMA, compare. Daily prices from FMP free tier via `api/prices.js` (cached in `price_history`); FMP free doesn't cover every symbol (e.g. small caps) — Schwab data replaces it next |
 | **Schwab connection** (All-in-One A) | **Done (read-only).** OAuth via `api/schwab.js` (`/api/schwab/connect`, `/callback`, `/status`, `/accounts`, `/disconnect`, routed by a `vercel.json` rewrite), encrypted tokens in `schwab_tokens`, 30-min auto-refresh, 7-day reconnect, nav status button and `/schwab` accounts/positions page. Connect on the live site (Schwab requires the https callback); localhost uses the same Neon tokens |
 | **Charts on Schwab data** | **Done.** `api/prices.js` uses Schwab price history when connected (FMP, then sample files, as fallbacks); intraday 1m/5m/15m/30m from Schwab, 1h/4h built from 30m (session-anchored at 9:30 ET); intraday times in Pacific; extended-hours toggle (gear → Session); live candles via the Schwab streamer (`public/src/schwab-stream.js`, LEVELONE_EQUITIES) with a LIVE dot and a data-source label |
@@ -147,39 +150,28 @@ News context for why a stock has been moving. It is kept visually and textually 
 
 ## Next Up
 
-In this order:
+Order agreed Nov 20, 2026. New ideas go to "Parked" unless they block day-to-day use; real bugs are fixed right away.
 
-### 1. In-app AI chat
+1. **Finish the Screener (one round):** dividend yield and 52-week range (Schwab), 5-year revenue growth rule, CSV export, Pass tooltip listing failed rules, net-margin sanity check (currency-mismatch filers)
+2. **Portfolio:** live Schwab positions plus Fidelity via CSV import, each compared with its saved DCF value and buy-below price (All-in-One D)
+3. **Alerts, morning email and weekly auto-refresh:** Vercel cron; email when a watchlist stock is at or below its buy-below price; ~6am Pacific digest; nightly/weekly Screener refresh so Refresh data is never manual (All-in-One D/E)
+4. **Options chain view:** cash-secured puts at or below the buy-below price, ~30–45 days, liquidity filters, annualized return, earnings-date flag (All-in-One F)
+5. **Order ticket:** app builds the order, user reviews and sends (All-in-One G, Level 1); broker-side brackets after
+6. **Trade journal:** fills from Schwab transactions plus notes (All-in-One H)
 
-- Ask questions about a company inside the app
-- Reuses the stored metrics and narratives as context instead of re-fetching, keeping cost and latency low
-- **Message cap** per day (like `DAILY_STORY_LIMIT`), since chat is the costliest feature: every turn re-reads the context and replies are open-ended
+### Parked
 
-### 2. Metric refinements
-
-- **Attributable FCF** after minority interests
-- **Non-recurring gain adjustment** (e.g. gains on asset sales) when judging earnings consistency
-- **Derived operating income for IFRS filers** where it isn't reported
-- **FCF/share from cover-page share counts** (the `dei` share count), to fill the gap for per-share-class companies like Visa
-- **Debt-to-equity on attributable equity** rather than total equity including non-controlling interests
-
-### 3. Screener (expanded: full market, not just cached companies)
-
-- Run the core and optional rules across the **whole market** using EDGAR `frames` data (see Data Strategy), with current prices from Schwab quotes for P/E and similar. Companies already in `company_financials` keep their richer 10-year data
-- Filter panel with a toggle and threshold per rule; results table with the metric values and Pass/Fail per rule
-- **Industry/sector exclusion toggles** (a paywalled feature on Finviz). Biotech is a toggle, **off by default — never excluded automatically**. Based on SIC codes (e.g. biotech/pharma 2834, 2836, 8731), so other industries can be toggled the same way
-- Saved screens (name + rule set) so a screen can be re-run in one click
-- Click any ticker to open it in Filings, the chart, or send it to the calculator
-
-### 4. Managed auth provider (only if multi-user happens)
-
-- Optional. The single-user login is enough for personal use; see "If This Is Ever Productized" below for what moving to a managed provider involves
-
----
+- In-app AI chat (costliest feature; needs a message cap)
+- Filings quality extras: ROIC, owner earnings, stock-based comp % of revenue, goodwill % of assets
+- Custom growth calculations in Statements (total and yearly growth from any chosen period)
+- Story tab support for S-1 / 424B4 filings (section headings differ from 10-K items)
+- Chart drawings saved to Neon; Fibonacci label overlap
+- Metric refinements: attributable FCF after minority interests, FCF/share for per-share-class companies (Visa) from cover-page share counts, D/E on attributable equity
+- Managed auth provider, only if multi-user happens
 
 ## All-in-One Platform (planned, Nov 2026)
 
-Goal: make Stockinator the one place for research → decide → execute → monitor, replacing day-to-day use of thinkorswim, TradingView and Finviz. Only the features actually used; no bloat. Priority relative to "Next Up" above is still to be decided.
+Goal: make Stockinator the one place for research → decide → execute → monitor, replacing day-to-day use of thinkorswim, TradingView and Finviz. Only the features actually used; no bloat. Build order: see "Next Up" above.
 
 ### Prerequisites (do first — approval takes time)
 
@@ -220,7 +212,7 @@ Goal: make Stockinator the one place for research → decide → execute → mon
 
 ### C. Screener
 
-See Next Up #3 (full market via EDGAR `frames`, industry toggles with biotech off by default).
+Built (see Status: Screener Rounds A–C). Remaining polish is Next Up #1; weekly auto-refresh comes with the alerts cron (Next Up #3).
 
 ### D. Portfolio, watchlist and alerts
 
@@ -456,14 +448,9 @@ Done:
 
 Also done since: operating margin on the Filings tab (ratio row, chart, informational scorecard line) and the Reverse DCF page with net cash in the forward calculator.
 
-Next (see Next Up above):
+Also done (Nov 2026): Schwab connection (read-only), charts prototype on Schwab data, watchlist, full-market Screener (Rounds A–C), Statements tab, IPO prospectus support, Filings valuation tiles, growth summary and Buffett checks.
 
-7. In-app AI chat (with a message cap)
-8. Metric refinements
-9. Screener (full market, industry toggles)
-10. Managed auth provider, only if multi-user happens
-
-All-in-One Platform (order vs. the list above to be decided): prerequisites (Schwab Roth + developer approval) → A. Schwab connection → B. Charts → C. Screener → D. Portfolio and alerts → E. Morning digest → F. Options chain view → G. Order ticket and broker-side brackets → H. Journal. Level 2 / time & sales deferred.
+Next (see Next Up above): finish Screener → Portfolio → Alerts, morning email and weekly auto-refresh → Options chain view → Order ticket → Trade journal. Level 2 / time & sales deferred.
 
 ---
 

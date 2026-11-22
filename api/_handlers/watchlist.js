@@ -43,7 +43,7 @@ export async function fetchQuotes(tickers) {
     // Schwab accepts a comma-separated batch
     for (let i = 0; i < tickers.length; i += 100) {
       const batch = tickers.slice(i, i + 100);
-      const qs = new URLSearchParams({ symbols: batch.join(','), fields: 'quote,reference' });
+      const qs = new URLSearchParams({ symbols: batch.join(','), fields: 'quote,reference,fundamental' });
       const data = await schwabGet(`${MARKET_BASE}/quotes?${qs}`);
       for (const [sym, item] of Object.entries(data || {})) {
         const q = item?.quote || {};
@@ -51,6 +51,9 @@ export async function fetchQuotes(tickers) {
           last: num(q.lastPrice) ?? num(q.mark),
           prevClose: num(q.closePrice),
           changePct: num(q.netPercentChange),
+          high52: num(q['52WeekHigh']),
+          low52: num(q['52WeekLow']),
+          divYield: num(item?.fundamental?.divYield), // percent, as Schwab reports it
           description: typeof item?.reference?.description === 'string' ? item.reference.description.slice(0, 200) : null,
         };
       }

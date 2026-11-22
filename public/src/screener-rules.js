@@ -12,8 +12,9 @@ export const RULES = [
   { key: 'roe', label: 'ROE', op: '>=', def: 0.25, fmt: 'pct', core: false, help: 'Net income ÷ shareholders’ equity' },
   { key: 'cr', label: 'Current ratio', op: '>', def: 1.0, fmt: 'x', core: false, help: 'Current assets ÷ current liabilities' },
   { key: 'reUp', label: 'Retained earnings rising', op: 'up', def: null, fmt: 'up', core: false, help: 'Retained earnings up year over year' },
+  { key: 'revGrowth', label: 'Revenue growth / yr', op: 'cagr', def: 0.05, fmt: 'cagr', core: false, help: 'Average yearly revenue growth from the first to the latest year with revenue (needs 3+ years apart)' },
 ];
-export const FIELD_INDEX = { gm: 3, nm: 4, sga: 5, int: 6, de: 7, ltd: 8, eps: 9, roe: 10, cr: 11, reUp: 12, rev: 13, sh: 14, eq: 15 };
+export const FIELD_INDEX = { gm: 3, nm: 4, sga: 5, int: 6, de: 7, ltd: 8, eps: 9, roe: 10, cr: 11, reUp: 12, rev: 13, sh: 14, eq: 15, revGrowth: 13 };
 
 export function defaultSettings() {
   const rules = {};
@@ -98,8 +99,23 @@ const meets = (rule, v, threshold) => {
   }
 };
 
+// Compound yearly growth from the first to the last value in a yearly series; null with fewer than 3 years between
+// them or a zero/negative start or end
+export function cagrOf(series) {
+  if (!Array.isArray(series)) return null;
+  let a = -1;
+  let b = -1;
+  for (let i = 0; i < series.length; i++) if (series[i] !== null && series[i] !== undefined) { if (a < 0) a = i; b = i; }
+  if (a < 0 || b - a < 3 || !(series[a] > 0) || !(series[b] > 0)) return null;
+  return Math.pow(series[b] / series[a], 1 / (b - a)) - 1;
+}
+
 // 'pass' | 'fail' | 'missing' for one rule on one company row
 export function evaluate(rule, series, threshold, hold) {
+  if (rule.op === 'cagr') {
+    const g = cagrOf(series);
+    return g === null ? 'missing' : g >= threshold ? 'pass' : 'fail';
+  }
   const vals = Array.isArray(series) ? series : [];
   const have = vals.filter((v) => v !== null && v !== undefined);
   if (rule.op === 'noloss') {
