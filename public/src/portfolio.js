@@ -284,11 +284,11 @@ export function renderPortfolio(container, { onOpenFilings }) {
       ...rows,
       schwabLine,
       el('div', { cls: 'pf-upload' }, [
-        el('button', { cls: 'btn btn-ghost btn-inline', text: 'Upload Fidelity CSV', attrs: { type: 'button' }, on: { click: () => fileInput.click() } }),
+        el('button', { cls: 'btn btn-ghost btn-inline', text: 'Upload CSV (Fidelity or Vanguard)', attrs: { type: 'button' }, on: { click: () => fileInput.click() } }),
         fileInput,
       ]),
       msg,
-      el('div', { cls: 'pf-dim pf-howto', text: 'On Fidelity.com, open Positions (All accounts) and use the download icon above the table. Accounts you’ve linked into Fidelity, like a Vanguard Roth IRA, come in the same file. Each upload replaces that account’s previous snapshot. Only the last 4 digits of account numbers are kept.' }),
+      el('div', { cls: 'pf-dim pf-howto', text: 'Fidelity: open Positions (All accounts) and use the download icon above the table; linked accounts come in the same file, but their numbers can be months old. Vanguard: download your holdings as a CSV (the OfxDownload file); it replaces the same account’s snapshot and has current share counts. Vanguard leaves out cost basis, so gain shows N/A unless the shares match the last snapshot or every buy is in the file. Only the last 4 digits of account numbers are kept.' }),
     );
   }
 

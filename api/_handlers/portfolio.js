@@ -131,13 +131,29 @@ export default async function handler(req, res) {
       } catch (err) {
         return res.status(400).json({ error: err.message });
       }
+      // Vanguard's file has no cost basis: keep the previous snapshot's cost for a holding whose share count hasn't changed
+      if (parsed.accounts.some((a) => a.source === 'vanguard')) {
+        const map = await tickerMap();
+        const prev = await sql`SELECT key, holdings FROM portfolio_accounts WHERE user_id = ${USER_ID}`;
+        for (const a of parsed.accounts) {
+          if (a.source !== 'vanguard') continue;
+          const old = prev.find((p) => p.key === a.key)?.holdings || [];
+          for (const h of a.holdings) {
+            if (h.costBasis !== null) continue;
+            const match = old.find((o) => (o.symbol || map[descKey(o.description)]) === h.symbol && Math.abs(o.quantity - h.quantity) < 0.001);
+            if (match && Number.isFinite(match.costBasis)) h.costBasis = match.costBasis;
+          }
+        }
+      }
       for (const a of parsed.accounts) {
         await sql`
           INSERT INTO portfolio_accounts (user_id, key, source, label, last4, linked, cash, holdings, imported_at)
           VALUES (${USER_ID}, ${a.key}, ${a.source}, ${a.label}, ${a.last4}, ${a.linked}, ${a.cash}, ${JSON.stringify(a.holdings)}::jsonb, NOW())
           ON CONFLICT (user_id, key) DO UPDATE SET
-            source = EXCLUDED.source, label = EXCLUDED.label, last4 = EXCLUDED.last4, linked = EXCLUDED.linked,
+            source = EXCLUDED.source,
+            label = CASE WHEN EXCLUDED.source = 'vanguard' THEN portfolio_accounts.label ELSE EXCLUDED.label END, last4 = EXCLUDED.last4, linked = EXCLUDED.linked,
             cash = EXCLUDED.cash, holdings = EXCLUDED.holdings, imported_at = NOW()
+          WHERE NOT (portfolio_accounts.source = 'vanguard' AND EXCLUDED.source = 'linked') -- Vanguard's own file is fresher than Fidelity's linked copy
         `;
       }
       return res.status(200).json({ ok: true, accounts: parsed.accounts.map((a) => ({ key: a.key, label: a.label, holdings: a.holdings.length })), skipped: parsed.skipped });
