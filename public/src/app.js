@@ -211,6 +211,11 @@ window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('locked')) render();
 });
 
+// Installable app: register the service worker (it caches only icons; see public/sw.js)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+}
+
 async function init() {
   try {
     const res = await nativeFetch('/api/auth?action=me');
