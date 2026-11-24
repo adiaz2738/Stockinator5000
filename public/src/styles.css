@@ -1064,3 +1064,50 @@ table.growth-table tr.rore-row td { border-top: 1px solid var(--border-hi); }
 .pf-msg { min-height: 18px; margin-top: 8px; font-size: 12px; color: var(--text-2); }
 .pf-howto { margin-top: 6px; line-height: 1.5; }
 @media (max-width: 900px) { .pf-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pf-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Hamburger + side drawer (same pattern as Financinator) ---------- */
+.hamburger-btn {
+  display: none; background: none; border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; width: 36px; height: 36px; font-size: 16px; cursor: pointer;
+  align-items: center; justify-content: center; transition: border-color 0.15s; flex-shrink: 0;
+}
+.hamburger-btn:hover { border-color: var(--border-hi); }
+.drawer-scrim {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  z-index: 997; opacity: 0; transition: opacity 0.2s ease;
+}
+.drawer-scrim.open { display: block; opacity: 1; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 280px; max-width: 85vw;
+  background: var(--card); border-left: 1px solid var(--border); box-shadow: -12px 0 32px rgba(0,0,0,0.6);
+  z-index: 998; display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform 0.22s ease; visibility: hidden;
+}
+.drawer.open { transform: translateX(0); visibility: visible; }
+.drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.drawer-header h2 { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+.drawer-close {
+  background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+  width: 30px; height: 30px; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.drawer-close:hover { border-color: var(--border-hi); }
+.drawer-actions { padding: 18px; overflow-y: auto; flex: 1; }
+.drawer-nav { display: flex; flex-direction: column; gap: 6px; }
+.drawer-tab {
+  width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-2); font-size: 13px; font-weight: 500; text-align: center; cursor: pointer;
+}
+.drawer-tab:hover { color: var(--text); border-color: var(--border-hi); }
+.drawer-tab.active { color: var(--blue); background: var(--blue-glow); border-color: var(--blue-dim); }
+.drawer-footer { flex-shrink: 0; padding: 10px 18px 18px; }
+.drawer-divider { height: 1px; background: var(--border); margin-bottom: 10px; }
+.drawer-signout {
+  width: 100%; background: none; border: none; color: var(--text-2); font-size: 13px; padding: 10px;
+  cursor: pointer; border-radius: 6px; text-align: center;
+}
+.drawer-signout:hover { color: var(--red); background: var(--red-dim); }
+@media (max-width: 1100px) {
+  .nav { padding: 0 14px; }
+  .nav-tabs, .nav-signout { display: none; }
+  .hamburger-btn { display: flex; }
+}

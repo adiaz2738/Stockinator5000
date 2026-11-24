@@ -21,6 +21,10 @@ const tabWatch = document.getElementById('tab-watchlist');
 const tabScreener = document.getElementById('tab-screener');
 const tabPortfolio = document.getElementById('tab-portfolio');
 const schwabNav = document.getElementById('schwab-status');
+const drawer = document.getElementById('drawer');
+const drawerScrim = document.getElementById('drawer-scrim');
+const hamburger = document.getElementById('hamburger');
+const drawerTabs = [...document.querySelectorAll('.drawer-tab')];
 
 function setActiveTab(route) {
   tabCharts.classList.toggle('active', route === '/charts' || route.startsWith('/chart/'));
@@ -32,6 +36,24 @@ function setActiveTab(route) {
   tabScreener.classList.toggle('active', route === '/screener');
   tabPortfolio.classList.toggle('active', route === '/portfolio');
   schwabNav.classList.toggle('active', route === '/schwab');
+  for (const b of drawerTabs) {
+    const r = b.dataset.route;
+    const on = r === '/charts' ? route === '/charts' || route.startsWith('/chart/') : r === '/calculator' ? route === '/' || route === '/calculator' : route === r;
+    b.classList.toggle('active', on);
+  }
+}
+
+// ---------- Side drawer (narrow screens) ----------
+function onDrawerKey(e) { if (e.key === 'Escape') closeDrawer(); }
+function openDrawer() {
+  drawer.classList.add('open'); drawerScrim.classList.add('open');
+  hamburger.setAttribute('aria-expanded', 'true');
+  document.addEventListener('keydown', onDrawerKey);
+}
+function closeDrawer() {
+  drawer.classList.remove('open'); drawerScrim.classList.remove('open');
+  hamburger.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('keydown', onDrawerKey);
 }
 
 function normalizeRoute() {
@@ -154,7 +176,7 @@ window.fetch = async (input, init) => {
   return res;
 };
 
-signOutBtn.addEventListener('click', async () => {
+async function signOut() {
   try {
     await nativeFetch('/api/auth', {
       method: 'POST',
@@ -166,7 +188,14 @@ signOutBtn.addEventListener('click', async () => {
   }
   // Reload so no company data from the old session stays in memory
   window.location.reload();
-});
+}
+
+signOutBtn.addEventListener('click', signOut);
+document.getElementById('drawer-signout').addEventListener('click', signOut);
+hamburger.addEventListener('click', () => (drawer.classList.contains('open') ? closeDrawer() : openDrawer()));
+drawerScrim.addEventListener('click', closeDrawer);
+document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+for (const b of drawerTabs) b.addEventListener('click', () => { closeDrawer(); navigate(b.dataset.route); });
 
 tabCalc.addEventListener('click', () => navigate('/calculator'));
 tabReverse.addEventListener('click', () => navigate('/reverse'));
