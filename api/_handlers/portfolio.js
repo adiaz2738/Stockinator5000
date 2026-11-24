@@ -10,6 +10,7 @@ import { parsePositionsCsv } from '../_portfolio.js';
 //   POST   /api/portfolio  { csv }                import a positions file (each account in it replaces its old snapshot)
 //   POST   /api/portfolio?action=label  { key, label }          rename an imported account
 //   POST   /api/portfolio?action=ticker { description, symbol } set the ticker for a holding the file has none for
+//   POST   /api/portfolio?action=cost   { key, total, quantity } set (or clear, total null) a holding's total cost by hand
 //   DELETE /api/portfolio?key=csv:1234            remove an imported account
 // Only the last 4 digits of an account number are stored; owner names are stripped from account names.
 
@@ -39,9 +40,17 @@ async function ensureTables() {
       ticker_map JSONB NOT NULL DEFAULT '{}'::jsonb
     )
   `;
+  await sql`ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS cost_map JSONB NOT NULL DEFAULT '{}'::jsonb`;
 }
 
 const descKey = (d) => String(d || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 120);
+
+// Hand-entered cost: "<account key>|<symbol or d:description>" -> { total, quantity }. Used only while the share count
+// still matches, so a later buy or sell never leaves a stale cost behind.
+async function costMap() {
+  const r = await sql`SELECT cost_map FROM portfolio_settings WHERE user_id = ${USER_ID}`;
+  return r[0]?.cost_map || {};
+}
 
 async function tickerMap() {
   const r = await sql`SELECT ticker_map FROM portfolio_settings WHERE user_id = ${USER_ID}`;
@@ -92,6 +101,7 @@ export default async function handler(req, res) {
           cash: Number(a.cash) || 0, holdings: a.holdings || [], importedAt: a.imported_at,
         })),
         tickerMap: map,
+        costMap: await costMap(),
         quotes,
         quoteStatus,
         buyBelow,
@@ -104,6 +114,22 @@ export default async function handler(req, res) {
       const key = String(req.body?.key || '').slice(0, 80);
       const label = String(req.body?.label || '').trim().replace(/\s+/g, ' ').slice(0, 60);
       await sql`UPDATE portfolio_accounts SET custom_label = ${label || null} WHERE user_id = ${USER_ID} AND key = ${key}`;
+      return res.status(200).json({ ok: true });
+    }
+
+    if (req.method === 'POST' && action === 'cost') {
+      const key = String(req.body?.key || '').slice(0, 200);
+      const total = req.body?.total === null || req.body?.total === '' ? null : Number(req.body?.total);
+      const quantity = Number(req.body?.quantity);
+      if (!key.includes('|')) return res.status(400).json({ error: 'Missing holding' });
+      if (total !== null && (!Number.isFinite(total) || total < 0 || total > 1e10)) return res.status(400).json({ error: 'Enter a dollar amount' });
+      if (total !== null && (!Number.isFinite(quantity) || quantity <= 0)) return res.status(400).json({ error: 'Missing share count' });
+      const map = await costMap();
+      if (total === null) delete map[key]; else map[key] = { total: Math.round(total * 100) / 100, quantity };
+      await sql`
+        INSERT INTO portfolio_settings (user_id, cost_map) VALUES (${USER_ID}, ${JSON.stringify(map)}::jsonb)
+        ON CONFLICT (user_id) DO UPDATE SET cost_map = EXCLUDED.cost_map
+      `;
       return res.status(200).json({ ok: true });
     }
 

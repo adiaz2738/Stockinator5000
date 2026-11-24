@@ -62,6 +62,12 @@ function buildModel(data) {
     }
     accounts.push({ key, label: a.label, cash: a.cash || 0, source: a.source, importedAt: a.importedAt, imported: true, count: (a.holdings || []).length, defaultLabel: a.defaultLabel, last4: a.last4 });
   }
+  // Hand-entered costs ("Set cost") win while the share count still matches the count they were entered for
+  for (const l of lots) {
+    l.costKey = `${l.accountKey}|${l.symbol || `d:${descKey(l.description)}`}`;
+    const o = data.costMap?.[l.costKey];
+    if (o && isNum(o.total) && Math.abs(o.quantity - l.quantity) < 0.001) { l.cost = o.total; l.costManual = true; }
+  }
   return { accounts, lots };
 }
 
@@ -195,7 +201,10 @@ export function renderPortfolio(container, { onOpenFilings }) {
         el('td', { cls: `num${h.lots.every((l) => l.stalePrice === true) ? ' stale' : ''}`, text: usd(h.price), attrs: h.lots.every((l) => l.stalePrice === true) ? { title: 'Price from the CSV file (no live quote)' } : {} }),
         el('td', { cls: 'num', text: usd0(h.value) }),
         el('td', { cls: 'num', text: total > 0 ? `${((h.value / total) * 100).toFixed(1)}%` : NA }),
-        el('td', { cls: `num ${g === null ? 'na' : g >= 0 ? 'up' : 'down'}`, text: g === null ? NA : pct(g), attrs: { title: h.costKnown ? `${signedUsd(h.value - h.cost)} on a cost of ${usd(h.cost)}` : 'Cost basis not available for every lot' } }),
+        el('td', { cls: `num ${g === null ? 'na' : g >= 0 ? 'up' : 'down'}`, attrs: { title: h.costKnown ? `${signedUsd(h.value - h.cost)} on a cost of ${usd(h.cost)}${h.lots.some((l) => l.costManual) ? ' (cost entered by hand)' : ''}` : 'Cost basis not available for every lot' } }, [
+          el('span', { text: g === null ? NA : pct(g) }),
+          h.lots.length === 1 && (!isNum(h.lots[0].cost) || h.lots[0].costManual) ? costBtn(h.lots[0]) : null,
+        ]),
         el('td', { cls: `num${h.symbol && isNum(buyBelow[h.symbol]) ? '' : ' na'}`, text: h.kind === 'fund' ? 'Fund' : h.symbol && isNum(buyBelow[h.symbol]) ? usd(buyBelow[h.symbol]) : NA }),
         vsCell(h),
       ]);
@@ -211,7 +220,10 @@ export function renderPortfolio(container, { onOpenFilings }) {
             el('td', { cls: 'num', text: usd(l.price) }),
             el('td', { cls: 'num', text: usd0(l.value) }),
             el('td', { cls: 'num', text: '' }),
-            el('td', { cls: `num ${lg === null ? 'na' : lg >= 0 ? 'up' : 'down'}`, text: lg === null ? NA : pct(lg), attrs: { title: isNum(l.cost) ? `Cost ${usd(l.cost)}` : 'No cost basis' } }),
+            el('td', { cls: `num ${lg === null ? 'na' : lg >= 0 ? 'up' : 'down'}`, attrs: { title: isNum(l.cost) ? `Cost ${usd(l.cost)}${l.costManual ? ' (entered by hand)' : ''}` : 'No cost basis' } }, [
+              el('span', { text: lg === null ? NA : pct(lg) }),
+              costBtn(l),
+            ]),
             el('td', {}), el('td', {}),
           ]));
         }
@@ -290,6 +302,27 @@ export function renderPortfolio(container, { onOpenFilings }) {
       msg,
       el('div', { cls: 'pf-dim pf-howto', text: 'Fidelity: open Positions (All accounts) and use the download icon above the table; linked accounts come in the same file, but their numbers can be months old. Vanguard: download your holdings as a CSV (the OfxDownload file); it replaces the same account’s snapshot and has current share counts. Vanguard leaves out cost basis, so gain shows N/A unless the shares match the last snapshot or every buy is in the file. Only the last 4 digits of account numbers are kept.' }),
     );
+  }
+
+  // "Set cost" (no cost on file) or "Edit cost" (any cost): total dollars paid for this account's shares of the holding
+  function costBtn(l) {
+    return el('button', {
+      cls: `pf-cost-btn${l.costManual ? ' manual' : ''}`,
+      text: !isNum(l.cost) ? 'Set cost' : l.costManual ? 'Edited' : 'Edit',
+      attrs: { type: 'button', title: l.costManual ? 'Cost entered by hand. Click to change or clear it.' : 'Enter the total cost of these shares by hand' },
+      on: { click: (e) => { e.stopPropagation(); setCost(l); } },
+    });
+  }
+
+  async function setCost(l) {
+    const acct = buildModel(data).accounts.find((a) => a.key === l.accountKey)?.label || 'this account';
+    const raw = window.prompt(`Total cost for ${qtyFmt(l.quantity)} shares of ${l.symbol || l.description} in ${acct}, in dollars (for example 7546.28).\nLeave blank to clear a cost you entered.`, l.costManual ? String(l.cost) : '');
+    if (raw === null) return;
+    const t = raw.replace(/[$,\s]/g, '');
+    if (t && !(Number(t) >= 0)) { window.alert('Enter a dollar amount, like 7546.28'); return; }
+    const res = await fetch('/api/portfolio?action=cost', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: l.costKey, total: t ? Number(t) : null, quantity: l.quantity }) });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); window.alert(b.error || 'Could not save the cost'); return; }
+    await load();
   }
 
   async function setTicker(description) {

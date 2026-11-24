@@ -42,6 +42,15 @@ export function renderWatchlist(container, { onOpenFilings, onValue }) {
   let schwabState = 'ok';
   const live = new Map(); // ticker -> { last, prevClose }
   const unsubs = new Map(); // ticker -> off()
+  // One scroll area for the life of the page: live ticks redraw the table inside it, so a sideways scroll (phones) stays put.
+  // Redraws also wait while a finger is on the table or it is still gliding.
+  const scrollWrap = el('div', { cls: 'table-scroll' });
+  let touching = false;
+  let lastScroll = 0;
+  scrollWrap.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+  scrollWrap.addEventListener('touchend', () => { touching = false; lastScroll = Date.now(); }, { passive: true });
+  scrollWrap.addEventListener('touchcancel', () => { touching = false; }, { passive: true });
+  scrollWrap.addEventListener('scroll', () => { lastScroll = Date.now(); }, { passive: true });
   let destroyed = false;
 
   // ----- add form -----
@@ -120,8 +129,11 @@ export function renderWatchlist(container, { onOpenFilings, onValue }) {
   }
 
   let raf = 0;
+  let waitTimer = 0;
   function scheduleRender() {
     cancelAnimationFrame(raf);
+    clearTimeout(waitTimer);
+    if (touching || Date.now() - lastScroll < 400) { waitTimer = setTimeout(scheduleRender, 400); return; }
     raf = requestAnimationFrame(render);
   }
 
@@ -193,7 +205,10 @@ export function renderWatchlist(container, { onOpenFilings, onValue }) {
       body.append(tr);
     }
     table.append(body);
-    tableCard.replaceChildren(el('div', { cls: 'table-scroll' }, [table]));
+    const left = scrollWrap.scrollLeft;
+    scrollWrap.replaceChildren(table);
+    if (scrollWrap.parentNode !== tableCard) tableCard.replaceChildren(scrollWrap);
+    scrollWrap.scrollLeft = left;
     paintFoot();
   }
 
@@ -206,6 +221,7 @@ export function renderWatchlist(container, { onOpenFilings, onValue }) {
 
   cleanup = () => {
     destroyed = true;
+    clearTimeout(waitTimer);
     cancelAnimationFrame(raf);
     offStatus();
     for (const off of unsubs.values()) off();
