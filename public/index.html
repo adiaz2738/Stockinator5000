@@ -23,6 +23,11 @@
   <div id="login-screen" class="login-screen" hidden></div>
   <nav class="nav">
     <div class="brand">
+      <!-- Back / forward: shown only in the installed app, which has no browser toolbar -->
+      <span class="app-history">
+        <button class="app-hist-btn" id="app-back" type="button" aria-label="Back" title="Back">&#8592;</button>
+        <button class="app-hist-btn" id="app-forward" type="button" aria-label="Forward" title="Forward">&#8594;</button>
+      </span>
       <img src="/logo-lockup.svg" alt="Stockinator 5000" height="28">
     </div>
     <div class="nav-right">

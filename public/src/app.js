@@ -211,6 +211,11 @@ window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('locked')) render();
 });
 
+// Installed app has no browser toolbar: show back / forward in the nav (iPhone home-screen apps report navigator.standalone)
+if (navigator.standalone === true) document.documentElement.classList.add('standalone');
+document.getElementById('app-back').addEventListener('click', () => window.history.back());
+document.getElementById('app-forward').addEventListener('click', () => window.history.forward());
+
 // Installable app: register the service worker (it caches only icons; see public/sw.js)
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });

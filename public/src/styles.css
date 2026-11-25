@@ -1115,3 +1115,14 @@ table.growth-table tr.rore-row td { border-top: 1px solid var(--border-hi); }
 .pf-cost-btn { margin-left: 6px; background: none; border: none; padding: 0; color: var(--blue); font-size: 11px; cursor: pointer; font-family: var(--sans); }
 .pf-cost-btn:hover { text-decoration: underline; }
 .pf-cost-btn.manual { color: var(--yellow); }
+
+/* ---------- Back / forward (installed app only) ---------- */
+.app-history { display: none; gap: 6px; margin-right: 6px; }
+.app-hist-btn {
+  background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+  width: 32px; height: 32px; font-size: 16px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.app-hist-btn:hover { border-color: var(--border-hi); }
+@media (display-mode: standalone) { .app-history { display: inline-flex; } }
+html.standalone .app-history { display: inline-flex; }
