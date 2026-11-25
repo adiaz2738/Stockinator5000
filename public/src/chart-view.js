@@ -6,6 +6,7 @@ import {
 } from './chart-data.js';
 import { subscribeQuotes, onStreamStatus, streamStatus } from './schwab-stream.js';
 import { latestValuation } from './latest-valuation.js';
+import { addToWatchlist } from './watchlist.js';
 
 // The reusable chart component. Used by the Charts page (mode 'full') and the Price card on the Filings company view
 // (mode 'card': same features, icon-only toolbars, can expand in place). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
@@ -77,6 +78,18 @@ const ICONS = {
   down: [['path', { d: 'M12 4v15M7 14l5 5 5-5' }]],
   more: [['circle', { cx: 6, cy: 12, r: 1.5, fill: 'currentColor' }], ['circle', { cx: 12, cy: 12, r: 1.5, fill: 'currentColor' }], ['circle', { cx: 18, cy: 12, r: 1.5, fill: 'currentColor' }]],
 };
+// Watchlist tickers, fetched once per page load and shared by every chart on it (for the "+ Watchlist" button)
+let watchSetPromise = null;
+function loadWatchSet() {
+  if (!watchSetPromise) {
+    watchSetPromise = fetch('/api/watchlist')
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => new Set((d.items || []).map((i) => String(i.ticker || '').toUpperCase())))
+      .catch(() => new Set());
+  }
+  return watchSetPromise;
+}
+
 function icon(name, size = 20) {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -439,6 +452,7 @@ function createView(kc, c, host, opts) {
     settings = loadSettings(tkr, c, VALID_TOOLS, loc);
     opts.onTickerChange?.(tkr);
     if (tickerInput) tickerInput.value = tkr;
+    if (!card) paintWatch?.();
     if (newTabLink) newTabLink.setAttribute('href', `/chart/${encodeURIComponent(tkr)}`);
     renderTfBar?.();
     buildLegendLine();
@@ -634,6 +648,7 @@ function createView(kc, c, host, opts) {
 
   // ----- top toolbar -----
   let tickerInput = null;
+  let paintWatch = null;
   let newTabLink = null;
   let renderTfBar = null;
   let setActiveTool = () => {};
@@ -648,6 +663,30 @@ function createView(kc, c, host, opts) {
     tickerInput.addEventListener('change', () => switchTicker(tickerInput.value));
     tickerInput.addEventListener('focus', () => tickerInput.select());
     const dl = el('datalist', { attrs: { id: listId } }, SAMPLE_TICKERS.map((t) => el('option', { attrs: { value: t } })));
+
+    // + Watchlist (Charts page only; on Filings the company header already has one)
+    const watchBtn = el('button', { class: 'vlc-btn vlc-watch', attrs: { type: 'button' } });
+    paintWatch = async () => {
+      const shown = tkr;
+      const set = await loadWatchSet();
+      if (shown !== tkr) return; // ticker changed while loading
+      const on = set.has(tkr);
+      watchBtn.textContent = on ? '✓ Watching' : '+ Watchlist';
+      watchBtn.disabled = on;
+      watchBtn.title = on ? `${tkr} is on your watchlist` : `Add ${tkr} to your watchlist`;
+    };
+    watchBtn.addEventListener('click', async () => {
+      const t = tkr;
+      watchBtn.disabled = true;
+      watchBtn.textContent = 'Adding…';
+      let ok = false;
+      try { ok = await addToWatchlist(t); } catch (err) { console.error(err); }
+      if (ok) (await loadWatchSet()).add(t);
+      if (!ok) { watchBtn.textContent = 'Could not add'; watchBtn.disabled = false; return; }
+      paintWatch();
+    });
+    watchBtn.textContent = '+ Watchlist';
+    if (!card) paintWatch();
 
     // Timeframe dropdown, grouped like TradingView, with favorites as quick buttons
     const tfTrigger = el('button', { class: 'vlc-btn mono', attrs: { type: 'button', title: 'Timeframe' } });
@@ -796,7 +835,7 @@ function createView(kc, c, host, opts) {
     }
 
     // In the card the ticker is the company being viewed, so there is no ticker box
-    top.append(...(card ? [] : [tickerInput, dl]), tfWrap, favWrap, el('span', { class: 'vlc-sep' }), indWrap, cmpWrap, gearWrap, fitBtn, el('span', { class: 'vlc-spacer' }), right);
+    top.append(...(card ? [] : [tickerInput, dl, watchBtn]), tfWrap, favWrap, el('span', { class: 'vlc-sep' }), indWrap, cmpWrap, gearWrap, fitBtn, el('span', { class: 'vlc-spacer' }), right);
   }
 
   function setCandleColors() {

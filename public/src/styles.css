@@ -1126,3 +1126,4 @@ table.growth-table tr.rore-row td { border-top: 1px solid var(--border-hi); }
 .app-hist-btn:hover { border-color: var(--border-hi); }
 @media (display-mode: standalone) { .app-history { display: inline-flex; } }
 html.standalone .app-history { display: inline-flex; }
+.vlc-watch:disabled { opacity: 1; color: var(--green); cursor: default; }
