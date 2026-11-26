@@ -1127,3 +1127,15 @@ table.growth-table tr.rore-row td { border-top: 1px solid var(--border-hi); }
 @media (display-mode: standalone) { .app-history { display: inline-flex; } }
 html.standalone .app-history { display: inline-flex; }
 .vlc-watch:disabled { opacity: 1; color: var(--green); cursor: default; }
+
+/* ---------- Mid-width windows (above the hamburger, below a full desktop): keep the nav on one line ---------- */
+.nav-tab { white-space: nowrap; }
+.brand-icon { display: none; border-radius: 6px; }
+@media (min-width: 1101px) and (max-width: 1450px) {
+  .nav { padding: 0 14px; }
+  .brand-full, .nav-tab.disabled, .nav-tab .proto-badge, .nav-tab .tab-long { display: none; }
+  .brand-icon { display: block; }
+  .nav-tabs { gap: 2px; }
+  .nav-tab { padding: 6px 8px; font-size: 12.5px; }
+  .nav-right { gap: 8px; }
+}
