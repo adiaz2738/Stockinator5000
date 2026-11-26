@@ -7,6 +7,7 @@ import { parsePositionsCsv } from '../_portfolio.js';
 // Portfolio: live Schwab accounts plus accounts imported from a positions CSV (Fidelity, including accounts linked
 // into Fidelity from other brokers). Read-only; nothing here places orders.
 //   GET    /api/portfolio                         everything the page needs (accounts, quotes, buy-below prices)
+//   GET    /api/portfolio?action=costs        average cost per ticker across all accounts (for the chart's cost line)
 //   POST   /api/portfolio  { csv }                import a positions file (each account in it replaces its old snapshot)
 //   POST   /api/portfolio?action=label  { key, label }          rename an imported account
 //   POST   /api/portfolio?action=ticker { description, symbol } set the ticker for a holding the file has none for
@@ -63,6 +64,50 @@ export default async function handler(req, res) {
   const action = String(req.query?.action || '');
   try {
     await ensureTables();
+
+    if (req.method === 'GET' && action === 'costs') {
+      // Same cost rules as the Portfolio page: broker cost, unless a hand-entered cost matches the share count.
+      // A ticker gets an average only when every account holding it has a cost; otherwise it is left out (no guess).
+      const [map, cmap, imported] = await Promise.all([
+        tickerMap(), costMap(),
+        sql`SELECT key, holdings FROM portfolio_accounts WHERE user_id = ${USER_ID}`,
+      ]);
+      const lots = [];
+      for (const a of imported) {
+        for (const h of a.holdings || []) {
+          const symbol = h.symbol || map[descKey(h.description)];
+          if (!symbol || !(h.quantity > 0)) continue;
+          lots.push({ acct: a.key, symbol, desc: h.description, quantity: h.quantity, cost: Number.isFinite(h.costBasis) ? h.costBasis : null });
+        }
+      }
+      try {
+        const data = await schwabGet(`${TRADER_BASE}/accounts?fields=positions`);
+        for (const a of (Array.isArray(data) ? data : []).map(slimAccount)) {
+          const key = `schwab:${a.last4 || ''}`;
+          for (const p of a.positions || []) {
+            const qty = (p.longQuantity || 0) - (p.shortQuantity || 0);
+            if (!p.symbol || p.assetType === 'CASH_EQUIVALENT' || qty <= 0) continue;
+            lots.push({ acct: key, symbol: p.symbol, quantity: qty, cost: Number.isFinite(p.averagePrice) ? p.averagePrice * qty : null });
+          }
+        }
+      } catch (err) {
+        if (!(err instanceof SchwabNotConnected)) console.error('portfolio costs: schwab failed:', err.message);
+      }
+      const costs = {};
+      for (const l of lots) {
+        const o = cmap[`${l.acct}|${l.symbol}`];
+        if (o && Number.isFinite(o.total) && Math.abs(o.quantity - l.quantity) < 0.001) l.cost = o.total;
+        const sym = String(l.symbol).toUpperCase();
+        const c = costs[sym] || (costs[sym] = { shares: 0, cost: 0, complete: true });
+        c.shares += l.quantity;
+        if (Number.isFinite(l.cost)) c.cost += l.cost; else c.complete = false;
+      }
+      const out = {};
+      for (const [sym, c] of Object.entries(costs)) {
+        out[sym] = { shares: Math.round(c.shares * 1000) / 1000, avgCost: c.complete && c.shares > 0 ? Math.round((c.cost / c.shares) * 100) / 100 : null };
+      }
+      return res.status(200).json({ costs: out });
+    }
 
     if (req.method === 'GET') {
       const imported = await sql`SELECT key, source, label, custom_label, last4, linked, cash, holdings, imported_at FROM portfolio_accounts WHERE user_id = ${USER_ID} ORDER BY imported_at`;

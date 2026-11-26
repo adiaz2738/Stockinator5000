@@ -1299,3 +1299,28 @@ export async function extractFilingSections(cik, { diagnose = false } = {}) {
   }
   return { filing, sections };
 }
+
+// ---------- Filing events for chart markers ----------
+// Earnings releases (8-K with Item 2.02, "Results of operations and financial condition"), annual reports
+// (10-K / 20-F / 40-F) and quarterly reports (10-Q), newest first, from the submissions API's recent list
+// (about the last 1,000 filings, usually many years). Amendments (10-K/A…) are left out.
+// [{ date: 'YYYY-MM-DD', kind: 'earnings' | 'annual' | 'quarterly', form, url }]
+const EVENT_KIND = { '10-K': 'annual', '20-F': 'annual', '40-F': 'annual', '10-Q': 'quarterly' };
+export async function listFilingEvents(cik) {
+  if (!CIK_RE.test(cik)) throw new Error('invalid cik');
+  const padded = cik.padStart(10, '0');
+  const res = await secFetch(`https://data.sec.gov/submissions/CIK${padded}.json`);
+  if (!res.ok) throw new Error(`SEC submissions request failed with status ${res.status}`);
+  const rc = (await res.json())?.filings?.recent;
+  if (!rc) return [];
+  const out = [];
+  for (let i = 0; i < rc.form.length; i++) {
+    const form = rc.form[i];
+    let kind = EVENT_KIND[form] || null;
+    if (!kind && form === '8-K' && String(rc.items?.[i] || '').split(',').map((s) => s.trim()).includes('2.02')) kind = 'earnings';
+    if (!kind) continue;
+    const accession = rc.accessionNumber[i];
+    out.push({ date: rc.filingDate[i], kind, form, url: `${ARCHIVES}/${parseInt(padded, 10)}/${accession.replace(/-/g, '')}/${rc.primaryDocument[i]}` });
+  }
+  return out;
+}

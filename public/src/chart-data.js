@@ -1,3 +1,4 @@
+import { markChartKeyChanged } from './chart-sync.js';
 // Data, settings and storage for the Charts component. Daily bars for any ticker come from /api/prices (Schwab when
 // connected, otherwise FMP's free tier; cached in Neon); the committed files in public/sample/ (real data from
 // scripts/fetch-sample-prices.js) are the last fallback. Weekly and monthly bars are aggregated from the daily ones.
@@ -208,8 +209,7 @@ export function aggregate(daily, tf) {
 }
 
 // ---------- Settings (localStorage, every access wrapped in try/catch) ----------
-// TODO(neon): persist drawings and chart settings per ticker (and the global preferences) in a Neon table
-// (user_id + ticker, JSONB) behind an authenticated API route, and load them on open. localStorage is only the prototype store.
+// Every save below is also mirrored to Neon (chart-sync.js), so drawings and settings follow you between devices.
 
 export const IND_KEYS = ['ema50', 'ema200', 'sma50', 'sma200'];
 const IND_DEFAULTS = (c) => ({
@@ -262,12 +262,14 @@ export function saveSettings(ticker, s, loc = 'page-0') {
     localStorage.setItem(LS_PREFIX + ticker, JSON.stringify({ ind: s.ind, drawings: s.drawings }));
     localStorage.setItem(localKey(loc, ticker), JSON.stringify({ tf: s.tf, vol: s.vol, compare: s.compare }));
   } catch (err) { /* storage unavailable: nothing persists */ }
+  markChartKeyChanged(LS_PREFIX + ticker);
+  markChartKeyChanged(localKey(loc, ticker));
 }
 export const settingsKey = (ticker) => LS_PREFIX + ticker;
 
 // Preferences shared by every chart: favorite timeframes, candle colors, last-used tool per group, keep-drawing lock
 export function loadGlobal(c) {
-  const d = { favTfs: ['D', 'W', 'M'], candle: { up: c.green, down: c.red }, lastTool: {}, keepDrawing: false, ext: false, valLines: true };
+  const d = { favTfs: ['D', 'W', 'M'], candle: { up: c.green, down: c.red }, lastTool: {}, keepDrawing: false, ext: false, valLines: true, events: true };
   try {
     const g = JSON.parse(localStorage.getItem(LS_GLOBAL) || 'null');
     if (!g) return d;
@@ -278,11 +280,13 @@ export function loadGlobal(c) {
     d.keepDrawing = g.keepDrawing === true;
     d.ext = g.ext === true;
     d.valLines = g.valLines !== false;
+    d.events = g.events !== false;
   } catch (err) { /* defaults */ }
   return d;
 }
 export function saveGlobal(g) {
   try { localStorage.setItem(LS_GLOBAL, JSON.stringify(g)); } catch (err) { /* ignore */ }
+  markChartKeyChanged(LS_GLOBAL);
 }
 
 export function loadLayout() {
@@ -294,5 +298,6 @@ export function loadLayout() {
 }
 export function saveLayout(l) {
   try { localStorage.setItem(LS_LAYOUT, JSON.stringify(l)); } catch (err) { /* ignore */ }
+  markChartKeyChanged(LS_LAYOUT);
 }
 

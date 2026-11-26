@@ -297,6 +297,7 @@ export function registerAll(kc, colors) {
   }));
 
   const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  const FIB_LABEL_ORDER = [0, 1, 0.618, 0.5, 0.382, 0.236, 0.786]; // most-watched levels keep their label first
   kc.registerOverlay(common('vlFib', 3, ({ chart, overlay, coordinates, bounding }) => {
     if (coordinates.length < 2) return [];
     const s = style(overlay);
@@ -308,9 +309,18 @@ export function registerAll(kc, colors) {
     FIB.forEach((lvl) => {
       const y = coordinates[0].y + dy * lvl;
       lines.push({ coordinates: [{ x: left, y }, { x: right, y }] });
+    });
+    // Labels: when the retracement is small on screen the levels crowd together, so place labels in order of
+    // importance and skip any that would sit closer than one text line to a label already placed (its line still shows)
+    const LABEL_GAP = 13;
+    const placed = [];
+    for (const lvl of FIB_LABEL_ORDER) {
+      const y = coordinates[0].y + dy * lvl;
+      if (placed.some((py) => Math.abs(py - y) < LABEL_GAP)) continue;
+      placed.push(y);
       const price = isNum(p0.value) && isNum(p1.value) ? p0.value + (p1.value - p0.value) * lvl : null;
       texts.push({ x: left + 4, y: y - 3, text: `${(lvl * 100).toFixed(1)}%${price !== null ? `  ${money(price)}` : ''}`, align: 'left', baseline: 'bottom' });
-    });
+    }
     const figs = [
       { key: 'trend', type: 'line', ignoreEvent: true, attrs: { coordinates: [coordinates[0], coordinates[1]] }, styles: { ...lineStyles(s), style: 'dashed', dashedValue: [4, 4], size: 1 } },
       { key: 'levels', type: 'line', attrs: lines, styles: lineStyles(s) },
@@ -321,6 +331,22 @@ export function registerAll(kc, colors) {
     if (info) figs.push({ key: 'info', type: 'text', ignoreEvent: true, attrs: { x: right - 4, y: Math.max(coordinates[0].y, coordinates[1].y) + 8, text: info, align: 'right', baseline: 'top' }, styles: textStyles(s) });
     return figs;
   }));
+
+  // Filing event marker (earnings release, 10-K, 10-Q): a small letter tag along the bottom of the price pane at the
+  // filing date. Hover shows what it is; click opens the filing on SEC.gov (handled by the chart). Not a drawing.
+  kc.registerOverlay({
+    name: 'VL_EVENT', totalStep: 2, lock: true,
+    needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+    createPointFigures: ({ overlay, coordinates, bounding }) => {
+      if (!coordinates.length) return [];
+      const e = overlay.extendData || {};
+      const x = coordinates[0].x;
+      if (x < 0 || x > bounding.width) return [];
+      const text = e.hover ? `${e.letter}  ${e.title}` : e.letter;
+      const align = e.hover && x > bounding.width - 200 ? 'right' : e.hover ? 'left' : 'center';
+      return [{ key: 'tag', type: 'text', attrs: { x, y: bounding.height - 6, text, align, baseline: 'bottom' }, styles: { color: '#04101c', backgroundColor: e.color || colors.text2, size: 10, family: "'Inter', sans-serif", weight: 700, paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2, borderRadius: 3 } }];
+    },
+  });
 
   // Valuation level (buy-below / intrinsic value from the latest saved valuation): a locked, full-width dashed line with
   // a label on the left and a colored price tag on the axis. Not a drawing: never saved, edited or deleted with drawings.

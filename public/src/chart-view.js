@@ -7,6 +7,8 @@ import {
 import { subscribeQuotes, onStreamStatus, streamStatus } from './schwab-stream.js';
 import { latestValuation } from './latest-valuation.js';
 import { addToWatchlist } from './watchlist.js';
+import { chartSyncReady } from './chart-sync.js';
+import { positionCost } from './position-cost.js';
 
 // The reusable chart component. Used by the Charts page (mode 'full') and the Price card on the Filings company view
 // (mode 'card': same features, icon-only toolbars, can expand in place). Library: KLineChart 10.1.0 (vendored, /vendor/klinecharts).
@@ -78,6 +80,18 @@ const ICONS = {
   down: [['path', { d: 'M12 4v15M7 14l5 5 5-5' }]],
   more: [['circle', { cx: 6, cy: 12, r: 1.5, fill: 'currentColor' }], ['circle', { cx: 12, cy: 12, r: 1.5, fill: 'currentColor' }], ['circle', { cx: 18, cy: 12, r: 1.5, fill: 'currentColor' }]],
 };
+// Earnings / 10-K / 10-Q dates per ticker from /api/events (SEC), kept for the page's life
+const eventsCache = new Map();
+function loadEvents(ticker) {
+  if (!eventsCache.has(ticker)) {
+    eventsCache.set(ticker, fetch(`/api/events?ticker=${encodeURIComponent(ticker)}`)
+      .then((r) => (r.ok ? r.json() : { events: [] }))
+      .then((d) => (Array.isArray(d.events) ? d.events : []))
+      .catch(() => { eventsCache.delete(ticker); return []; }));
+  }
+  return eventsCache.get(ticker);
+}
+
 // Watchlist tickers, fetched once per page load and shared by every chart on it (for the "+ Watchlist" button)
 let watchSetPromise = null;
 function loadWatchSet() {
@@ -184,6 +198,7 @@ export async function mountChartView(host, opts = {}) {
   const c = tokens();
   const status = el('div', { class: 'vlc-loading', text: 'Loading chart…' });
   host.append(status);
+  await chartSyncReady(); // drawings and settings saved on another device land in localStorage first
   let kc;
   try {
     kc = await loadLibrary();
@@ -739,7 +754,8 @@ function createView(kc, c, host, opts) {
         }
         menu.append(
           el('div', { class: 'vlc-menu-head', text: 'Valuation' }),
-          check('Buy-below & intrinsic value lines', G.valLines, (on) => { G.valLines = on; persistGlobal(); applyValuationLines(); }),
+          check('Buy-below, intrinsic value & your cost lines', G.valLines, (on) => { G.valLines = on; persistGlobal(); applyValuationLines(); }),
+          check('Earnings (E), 10-K (K) and 10-Q (Q) markers', G.events, (on) => { G.events = on; persistGlobal(); applyEvents(); }),
         );
       },
     });
@@ -905,24 +921,68 @@ function createView(kc, c, host, opts) {
     left.append(lockBtn, el('button', { class: 'vlc-tool danger', attrs: { type: 'button', title: 'Delete all drawings on this ticker', 'aria-label': 'Delete all drawings' }, on: { click: deleteAllDrawings } }, icon('trash', 22)));
   }
 
-  // ----- valuation lines (latest saved valuation: buy-below and intrinsic value) -----
-  const LEVEL_IDS = ['vl_lvl_bb', 'vl_lvl_iv'];
+  // ----- level lines: latest saved valuation (buy-below, intrinsic value) and your average cost from Portfolio -----
+  const LEVEL_IDS = ['vl_lvl_bb', 'vl_lvl_iv', 'vl_lvl_cost'];
   async function applyValuationLines() {
     if (!chart) return;
     for (const id of LEVEL_IDS) chart.removeOverlay({ id });
     if (!G.valLines) return;
-    const v = await latestValuation(tkr);
-    if (!v || !chart || destroyed) return;
+    const [v, pos] = await Promise.all([latestValuation(tkr), positionCost(tkr)]);
+    if (!chart || destroyed) return;
     const list = chart.getDataList();
     const ts = list.length ? list[list.length - 1].timestamp : Date.now();
     for (const id of LEVEL_IDS) chart.removeOverlay({ id });
     const lines = [
-      { id: 'vl_lvl_bb', value: v.buyBelow, color: c.green, label: `Buy below $${v.buyBelow?.toFixed(2)}` },
-      { id: 'vl_lvl_iv', value: v.intrinsicValue, color: c.blue, label: `Intrinsic value $${v.intrinsicValue?.toFixed(2)}` },
+      { id: 'vl_lvl_bb', value: v?.buyBelow, color: c.green, label: `Buy below $${v?.buyBelow?.toFixed(2)}` },
+      { id: 'vl_lvl_iv', value: v?.intrinsicValue, color: c.blue, label: `Intrinsic value $${v?.intrinsicValue?.toFixed(2)}` },
+      // Your average cost across all accounts (Portfolio); only when every account holding it has a cost
+      { id: 'vl_lvl_cost', value: pos?.avgCost, color: c.text, label: `Your cost $${pos?.avgCost?.toFixed(2)} · ${pos?.shares} sh` },
     ];
     for (const l of lines) {
       if (!Number.isFinite(l.value) || l.value <= 0) continue;
       chart.createOverlay({ id: l.id, name: 'VL_LEVEL', paneId: 'candle_pane', lock: true, points: [{ timestamp: ts, value: l.value }], extendData: { color: l.color, label: l.label } });
+    }
+  }
+
+  // ----- filing markers: earnings releases (E), 10-K (K), 10-Q (Q) along the bottom of the price pane -----
+  let eventIds = [];
+  async function applyEvents() {
+    if (!chart) return;
+    for (const id of eventIds) chart.removeOverlay({ id });
+    eventIds = [];
+    if (!G.events || isIntraday(settings.tf)) return; // daily, weekly and monthly charts only
+    const shownFor = tkr;
+    const events = await loadEvents(tkr);
+    if (!chart || destroyed || shownFor !== tkr) return;
+    const list = chart.getDataList();
+    if (!list.length) return;
+    const first = list[0].timestamp, last = list[list.length - 1].timestamp + 7 * 86400000;
+    const STYLE = {
+      earnings: { letter: 'E', color: '#b48cff', name: 'Earnings release (8-K)' },
+      annual: { letter: 'K', color: c.yellow, name: 'Annual report' },
+      quarterly: { letter: 'Q', color: c.text2, name: 'Quarterly report (10-Q)' },
+    };
+    for (const id of eventIds) chart.removeOverlay({ id });
+    eventIds = [];
+    for (const ev of events) {
+      const [y, m, d] = String(ev.date).split('-').map(Number);
+      const ts = Date.UTC(y, m - 1, d);
+      if (!Number.isFinite(ts) || ts < first || ts > last) continue;
+      const st = STYLE[ev.kind];
+      if (!st) continue;
+      const id = `vl_ev_${ev.kind}_${ev.date}`;
+      if (eventIds.includes(id)) continue;
+      const when = new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      const title = `${ev.kind === 'annual' ? `${st.name} (${ev.form})` : st.name} · ${when} · click to open`;
+      chart.createOverlay({
+        id, name: 'VL_EVENT', paneId: 'candle_pane', lock: true,
+        points: [{ timestamp: ts, value: list[list.length - 1].close }],
+        extendData: { letter: st.letter, color: st.color, title, hover: false },
+        onClick: () => { if (/^https:\/\/www\.sec\.gov\//.test(ev.url)) window.open(ev.url, '_blank', 'noopener'); return false; },
+        onMouseEnter: ({ overlay }) => { chart?.overrideOverlay({ id: overlay.id, extendData: { ...overlay.extendData, hover: true } }); return false; },
+        onMouseLeave: ({ overlay }) => { chart?.overrideOverlay({ id: overlay.id, extendData: { ...overlay.extendData, hover: false } }); return false; },
+      });
+      eventIds.push(id);
     }
   }
 
@@ -973,6 +1033,7 @@ function createView(kc, c, host, opts) {
           requestAnimationFrame(() => { fitAll(); updateLegend(); });
           refreshCompare();
           applyValuationLines();
+          applyEvents();
         } catch (err) {
           dataSource = null;
           lg.src.textContent = '';

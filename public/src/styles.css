@@ -1139,3 +1139,19 @@ html.standalone .app-history { display: inline-flex; }
   .nav-tab { padding: 6px 8px; font-size: 12.5px; }
   .nav-right { gap: 8px; }
 }
+
+/* ---------- Charts on phones and touch screens ---------- */
+/* Full-page charts own every finger gesture (pan, pinch, draw); the Price card in Filings lets a vertical swipe scroll the
+   page and keeps horizontal drags and pinches for the chart. Expanded, the card behaves like the full page. */
+.vlc-canvas { touch-action: none; }
+.vlc-view.cardmode:not(.expanded) .vlc-canvas { touch-action: pan-y; }
+@media (max-width: 600px) {
+  .vlc-top { padding: 4px 6px; gap: 4px; }
+  .vlc-top .vlc-lbl { display: none; }                 /* "Indicators" / "Compare": icon only */
+  .vlc-top .vlc-seg, .vlc-top a.vlc-ibtn[target="_blank"] { display: none; } /* two-chart layout and new-tab link */
+  .vlc-top .vlc-menu {                                   /* toolbar menus: full width under the toolbar, never off-screen */
+    position: fixed; left: 8px; right: 8px; top: 112px; min-width: 0;
+    max-height: calc(100dvh - 130px); overflow-y: auto;
+  }
+  .vlc-left { width: 44px; }
+}

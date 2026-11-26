@@ -37,6 +37,10 @@
       "destination": "/api/company?resource=screener"
     },
     {
+      "source": "/api/events",
+      "destination": "/api/company?resource=events"
+    },
+    {
       "source": "/api/valuations",
       "destination": "/api/saved?resource=valuations"
     },
@@ -47,6 +51,10 @@
     {
       "source": "/api/portfolio",
       "destination": "/api/saved?resource=portfolio"
+    },
+    {
+      "source": "/api/chartstate",
+      "destination": "/api/saved?resource=chartstate"
     },
     {
       "source": "/api/prices",

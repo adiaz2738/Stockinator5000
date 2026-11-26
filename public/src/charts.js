@@ -1,8 +1,9 @@
 import { mountChartView, disposeCharts, __views } from './chart-view.js';
 import { loadLayout, saveLayout, SAMPLE_TICKERS } from './chart-data.js';
+import { chartSyncReady } from './chart-sync.js';
 
 // The Charts page (/charts and /chart/TICKER): fills the viewport below the nav and holds one or two chart views.
-// All chart behavior lives in chart-view.js (shared with the Filings tab). Prototype: static sample data, see chart-data.js.
+// All chart behavior lives in chart-view.js (shared with the Filings tab).
 
 export { disposeCharts };
 
@@ -11,7 +12,10 @@ export async function renderCharts(app, { ticker } = {}) {
   app.replaceChildren();
   app.classList.add('vlc-fill');
 
+  await chartSyncReady(); // the saved layout may come from another device
   const layout = loadLayout();
+  // Phones show one chart (the two-chart toggle is hidden there); the saved desktop layout is left as it is
+  if (window.matchMedia('(max-width: 600px)').matches) layout.count = 1;
   const routeTicker = ticker && /^[A-Za-z][A-Za-z0-9.\-]{0,9}$/.test(ticker) ? ticker.toUpperCase() : null;
   if (routeTicker) layout.tickers[0] = routeTicker;
   if (layout.tickers[1] === layout.tickers[0]) layout.tickers[1] = SAMPLE_TICKERS.find((t) => t !== layout.tickers[0]) || SAMPLE_TICKERS[0];
