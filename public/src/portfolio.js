@@ -44,11 +44,13 @@ function buildModel(data) {
       const price = q[p.symbol]?.last ?? (isNum(p.marketValue) && qty ? p.marketValue / qty : null);
       lots.push({
         accountKey: key, symbol: p.symbol || null, description: p.description || p.symbol || '', quantity: qty, price,
-        value: isNum(price) ? price * qty : p.marketValue, cost: isNum(p.averagePrice) ? p.averagePrice * qty : null,
+        value: isNum(price) ? price * qty : p.marketValue, cost: isNum(p.averagePrice) && p.averagePrice > 0 ? p.averagePrice * qty : null, // Schwab sends 0 when it has no cost basis
         dayChange: isNum(p.dayProfitLoss) ? p.dayProfitLoss : null, kind: FUND_TYPES.has(p.assetType) ? 'fund' : 'stock',
       });
     }
-    accounts.push({ key, label: `Schwab ${typeLabel} ···${a.last4 || '?'}`, cash, source: 'schwab' });
+    const defaultLabel = `Schwab ${typeLabel} ···${a.last4 || '?'}`;
+    const custom = data.labelMap?.[key];
+    accounts.push({ key, label: custom ? `${custom} ···${a.last4 || '?'}` : defaultLabel, customLabel: custom || '', defaultLabel, cash, source: 'schwab', count: (a.positions || []).filter((p) => p.assetType !== 'CASH_EQUIVALENT').length });
   }
   for (const a of data.imported || []) {
     const key = a.key;
@@ -281,8 +283,9 @@ export function renderPortfolio(container, { onOpenFilings }) {
       }
     });
     const rows = accounts.filter((a) => a.imported).map((a) => el('div', { cls: 'pf-import-row' }, [
-      el('span', { text: `${a.label}${a.last4 ? ` ···${a.last4}` : ''} · ${a.count} holding${a.count === 1 ? '' : 's'} · ${fmtDate(a.importedAt)}` }),
+      el('span', { text: `${a.label}${a.last4 ? ` ···${a.last4}` : ''} · ${a.count} holding${a.count === 1 ? '' : 's'} · cash ${usd(a.cash)} · ${fmtDate(a.importedAt)}` }),
       el('span', { cls: 'pf-import-actions' }, [
+        el('button', { cls: 'pf-link', text: 'Edit cash', attrs: { type: 'button', title: 'Correct this account’s cash until the next upload (e.g. cash that already moved to another broker)' }, on: { click: () => editCash(a) } }),
         el('button', { cls: 'pf-link', text: 'Rename', attrs: { type: 'button' }, on: { click: () => rename(a) } }),
         el('button', { cls: 'pf-link', text: 'Remove', attrs: { type: 'button' }, on: { click: () => remove(a) } }),
       ]),
@@ -291,9 +294,17 @@ export function renderPortfolio(container, { onOpenFilings }) {
       el('span', { text: data.schwab?.status === 'ok' ? `Schwab · live${schwabStatus?.connected ? ` · reconnect in ${schwabStatus.daysLeft} day${schwabStatus.daysLeft === 1 ? '' : 's'}` : ''}` : 'Schwab · not connected' }),
       el('a', { cls: 'pf-link', text: data.schwab?.status === 'ok' ? 'Manage' : 'Connect', attrs: { href: '/schwab' } }),
     ]);
+    // Schwab accounts: live, nothing to upload; Rename because Schwab only reports "Cash" or "Margin", not "Roth IRA"
+    const schwabRows = accounts.filter((a) => a.source === 'schwab').map((a) => el('div', { cls: 'pf-import-row' }, [
+      el('span', { text: `${a.label} · ${a.count} holding${a.count === 1 ? '' : 's'} · cash ${usd(a.cash)} · live` }),
+      el('span', { cls: 'pf-import-actions' }, [
+        el('button', { cls: 'pf-link', text: 'Rename', attrs: { type: 'button' }, on: { click: () => renameSchwab(a) } }),
+      ]),
+    ]));
     importsCard.replaceChildren(
-      el('div', { cls: 'section-label', text: 'Imports' }),
+      el('div', { cls: 'section-label', text: 'Accounts' }),
       ...rows,
+      ...schwabRows,
       schwabLine,
       el('div', { cls: 'pf-upload' }, [
         el('button', { cls: 'btn btn-ghost btn-inline', text: 'Upload CSV (Fidelity or Vanguard)', attrs: { type: 'button' }, on: { click: () => fileInput.click() } }),
@@ -332,6 +343,23 @@ export function renderPortfolio(container, { onOpenFilings }) {
     if (!res.ok) { const b = await res.json().catch(() => ({})); window.alert(b.error || 'Could not save the ticker'); return; }
     await load();
   }
+  async function renameSchwab(a) {
+    const label = window.prompt(`Name for ${a.defaultLabel} (for example "Schwab Roth IRA"). The last 4 digits stay. Leave blank to go back to Schwab's name.`, a.customLabel);
+    if (label === null) return;
+    await fetch('/api/portfolio?action=label', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: a.key, label }) });
+    await load();
+  }
+
+  async function editCash(a) {
+    const raw = window.prompt(`Cash in ${a.label}, in dollars. Your next upload of this account replaces it.`, String(a.cash ?? 0));
+    if (raw === null) return;
+    const t = raw.replace(/[$,\s]/g, '');
+    if (!t || !(Number(t) >= 0)) { window.alert('Enter a dollar amount, like 0 or 647.40'); return; }
+    const res = await fetch('/api/portfolio?action=cash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: a.key, cash: Number(t) }) });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); window.alert(b.error || 'Could not save the cash'); return; }
+    await load();
+  }
+
   async function rename(a) {
     const label = window.prompt('Account name', a.label);
     if (label === null) return;

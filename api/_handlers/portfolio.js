@@ -9,7 +9,8 @@ import { parsePositionsCsv } from '../_portfolio.js';
 //   GET    /api/portfolio                         everything the page needs (accounts, quotes, buy-below prices)
 //   GET    /api/portfolio?action=costs        average cost per ticker across all accounts (for the chart's cost line)
 //   POST   /api/portfolio  { csv }                import a positions file (each account in it replaces its old snapshot)
-//   POST   /api/portfolio?action=label  { key, label }          rename an imported account
+//   POST   /api/portfolio?action=label  { key, label }          rename an account (imported, or Schwab "schwab:1234"); blank resets
+//   POST   /api/portfolio?action=cash   { key, cash }           correct an imported account's cash (the next upload replaces it)
 //   POST   /api/portfolio?action=ticker { description, symbol } set the ticker for a holding the file has none for
 //   POST   /api/portfolio?action=cost   { key, total, quantity } set (or clear, total null) a holding's total cost by hand
 //   DELETE /api/portfolio?key=csv:1234            remove an imported account
@@ -42,6 +43,8 @@ async function ensureTables() {
     )
   `;
   await sql`ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS cost_map JSONB NOT NULL DEFAULT '{}'::jsonb`;
+  // Names for Schwab accounts (Schwab's API only says CASH or MARGIN, not that an account is a Roth IRA): "schwab:1234" -> name
+  await sql`ALTER TABLE portfolio_settings ADD COLUMN IF NOT EXISTS label_map JSONB NOT NULL DEFAULT '{}'::jsonb`;
 }
 
 const descKey = (d) => String(d || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 120);
@@ -51,6 +54,11 @@ const descKey = (d) => String(d || '').trim().toLowerCase().replace(/\s+/g, ' ')
 async function costMap() {
   const r = await sql`SELECT cost_map FROM portfolio_settings WHERE user_id = ${USER_ID}`;
   return r[0]?.cost_map || {};
+}
+
+async function labelMap() {
+  const r = await sql`SELECT label_map FROM portfolio_settings WHERE user_id = ${USER_ID}`;
+  return r[0]?.label_map || {};
 }
 
 async function tickerMap() {
@@ -87,7 +95,7 @@ export default async function handler(req, res) {
           for (const p of a.positions || []) {
             const qty = (p.longQuantity || 0) - (p.shortQuantity || 0);
             if (!p.symbol || p.assetType === 'CASH_EQUIVALENT' || qty <= 0) continue;
-            lots.push({ acct: key, symbol: p.symbol, quantity: qty, cost: Number.isFinite(p.averagePrice) ? p.averagePrice * qty : null });
+            lots.push({ acct: key, symbol: p.symbol, quantity: qty, cost: Number.isFinite(p.averagePrice) && p.averagePrice > 0 ? p.averagePrice * qty : null }); // 0 = no basis on file
           }
         }
       } catch (err) {
@@ -147,6 +155,7 @@ export default async function handler(req, res) {
         })),
         tickerMap: map,
         costMap: await costMap(),
+        labelMap: await labelMap(),
         quotes,
         quoteStatus,
         buyBelow,
@@ -158,7 +167,25 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && action === 'label') {
       const key = String(req.body?.key || '').slice(0, 80);
       const label = String(req.body?.label || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (/^schwab:\w{0,8}$/.test(key)) {
+        const map = await labelMap();
+        if (label) map[key] = label; else delete map[key];
+        await sql`
+          INSERT INTO portfolio_settings (user_id, label_map) VALUES (${USER_ID}, ${JSON.stringify(map)}::jsonb)
+          ON CONFLICT (user_id) DO UPDATE SET label_map = EXCLUDED.label_map
+        `;
+        return res.status(200).json({ ok: true });
+      }
       await sql`UPDATE portfolio_accounts SET custom_label = ${label || null} WHERE user_id = ${USER_ID} AND key = ${key}`;
+      return res.status(200).json({ ok: true });
+    }
+
+    if (req.method === 'POST' && action === 'cash') {
+      const key = String(req.body?.key || '').slice(0, 80);
+      const cash = Number(req.body?.cash);
+      if (!Number.isFinite(cash) || cash < 0 || cash > 1e10) return res.status(400).json({ error: 'Enter a dollar amount' });
+      const r = await sql`UPDATE portfolio_accounts SET cash = ${Math.round(cash * 100) / 100} WHERE user_id = ${USER_ID} AND key = ${key} RETURNING key`;
+      if (!r.length) return res.status(404).json({ error: 'Account not found' });
       return res.status(200).json({ ok: true });
     }
 
